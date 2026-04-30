@@ -1387,23 +1387,45 @@ with tab_hist:
 
                 col_a, col_b = st.columns(2)
 
-                # Pace por lap
+                # Pace por lap — filtra micro-laps de descanso (< 200m ou pace > 8:00/km)
                 with col_a:
-                    laps_pace = laps_ativ[laps_ativ["pace_sec_km"].notna()].copy()
-                    laps_pace["Pace_fmt"] = laps_pace["pace_sec_km"].apply(fmt_pace)
-                    laps_pace["Pace_min"] = laps_pace["pace_sec_km"] / 60
-                    laps_pace["Lap"]      = laps_pace["lap_index"].astype(str)
-                    fig = go.Figure(go.Bar(
-                        x=laps_pace["Lap"], y=laps_pace["Pace_min"],
-                        text=laps_pace["Pace_fmt"], textposition="outside",
-                        marker_color=BLUE,
-                        customdata=laps_pace[["distance_m","Pace_fmt"]].values,
-                        hovertemplate="Lap %{x}<br>Pace: %{customdata[1]}/km<br>"
-                                      "Distância: %{customdata[0]:.0f}m<extra></extra>",
-                    ))
-                    set_pace_yaxis(fig, laps_pace["pace_sec_km"])
-                    fig.update_layout(title="⚡ Pace por Lap", xaxis_title="Lap")
-                    st.plotly_chart(fig, use_container_width=True)
+                    laps_pace = laps_ativ[
+                        laps_ativ["pace_sec_km"].notna() &
+                        (laps_ativ["distance_m"] >= 200) &
+                        (laps_ativ["pace_sec_km"] <= 480)   # ignora laps > 8:00/km
+                    ].copy()
+
+                    n_ignorados = len(laps_ativ) - len(laps_pace)
+
+                    if laps_pace.empty:
+                        st.info("Nenhum lap com distância ≥ 200m encontrado.")
+                    else:
+                        laps_pace["Pace_fmt"] = laps_pace["pace_sec_km"].apply(fmt_pace)
+                        laps_pace["Pace_min"] = laps_pace["pace_sec_km"] / 60
+                        laps_pace["Lap"]      = laps_pace["lap_index"].astype(str)
+
+                        # Cores por zona relativa ao pace mediano
+                        p50 = laps_pace["pace_sec_km"].median()
+                        laps_pace["cor"] = laps_pace["pace_sec_km"].apply(
+                            lambda x: GREEN if x < p50 * 0.97
+                            else RED if x > p50 * 1.03 else BLUE)
+
+                        fig = go.Figure(go.Bar(
+                            x=laps_pace["Lap"], y=laps_pace["Pace_min"],
+                            text=laps_pace["Pace_fmt"], textposition="outside",
+                            marker_color=laps_pace["cor"].tolist(),
+                            customdata=laps_pace[["distance_m","Pace_fmt"]].values,
+                            hovertemplate="Lap %{x}<br>Pace: %{customdata[1]}/km<br>"
+                                          "Distância: %{customdata[0]:.0f}m<extra></extra>",
+                        ))
+                        set_pace_yaxis(fig, laps_pace["pace_sec_km"])
+                        titulo = "⚡ Pace por Lap"
+                        if n_ignorados > 0:
+                            titulo += f" ({n_ignorados} micro-laps ocultados)"
+                        fig.update_layout(title=titulo, xaxis_title="Lap")
+                        st.plotly_chart(fig, use_container_width=True)
+                        st.caption("🟢 Abaixo da mediana · 🔵 Na mediana · 🔴 Acima da mediana. "
+                                   "Micro-laps de descanso (< 200m ou > 8:00/km) são ocultados do gráfico mas aparecem na tabela.")
 
                 # FC por lap
                 with col_b:
@@ -1462,5 +1484,3 @@ with tab_hist:
                     lambda x: f"{x*2:.0f} spm" if not pd.isna(x) else "—")
                 df_laps_tab = df_laps_tab.rename(columns=cols_lap)
                 st.dataframe(df_laps_tab, hide_index=True, use_container_width=True)
-        
-# comando para rodar: streamlit run c:/Users/gamsc209/Documents/ProjetosPyGit/strava/app.py
