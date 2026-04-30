@@ -1343,5 +1343,124 @@ with tab_hist:
             lambda x: f"{int(x)}" if not pd.isna(x) else "—")
         df_tab = df_tab.rename(columns=cols)
         st.dataframe(df_tab, hide_index=True, use_container_width=True)
+
+        # ── Drill-down por atividade ───────────────────────────────────────────
+        st.markdown("---")
+        st.subheader("🔎 Detalhes por Lap")
+
+        if lps_run.empty:
+            st.info("Dados de laps não disponíveis.")
+        else:
+            # Monta lista de atividades com laps disponíveis
+            ids_com_laps = lps_run["activity_id"].unique()
+            df_sel = df_hv[df_hv["id"].isin(ids_com_laps)].copy()
+            df_sel = df_sel.sort_values("start_date", ascending=False)
+            df_sel["label"] = (df_sel["start_date"].dt.strftime("%d/%m/%Y") +
+                               " — " + df_sel["name"].fillna("Sem nome") +
+                               " (" + df_sel["distance_km"].apply(lambda x: f"{x:.1f}km") + ")")
+
+            ativ_selecionada = st.selectbox(
+                "Selecione uma corrida para ver os laps:",
+                options=df_sel["id"].tolist(),
+                format_func=lambda x: df_sel.set_index("id").loc[x, "label"],
+            )
+
+            if ativ_selecionada:
+                laps_ativ = (lps_run[lps_run["activity_id"] == ativ_selecionada]
+                             .sort_values("lap_index").copy())
+
+                # KPIs da atividade
+                act_info = df_hv[df_hv["id"] == ativ_selecionada].iloc[0]
+                c1,c2,c3,c4,c5 = st.columns(5)
+                c1.metric("📏 Distância",  f"{act_info['distance_km']:.2f} km")
+                c2.metric("⚡ Pace Médio", fmt_pace(act_info["pace_sec_km"]))
+                c3.metric("❤️ FC Média",
+                          f"{act_info['average_heartrate']:.0f} bpm"
+                          if not pd.isna(act_info.get("average_heartrate", float("nan"))) else "—")
+                c4.metric("⛰️ Elevação",
+                          f"{act_info['elevation_gain']:.0f} m"
+                          if not pd.isna(act_info.get("elevation_gain", float("nan"))) else "—")
+                c5.metric("🔢 Laps",       f"{len(laps_ativ)}")
+
+                st.markdown(f"**{act_info['name']}** — "
+                            f"{act_info['start_date'].strftime('%d/%m/%Y %H:%M')}")
+
+                col_a, col_b = st.columns(2)
+
+                # Pace por lap
+                with col_a:
+                    laps_pace = laps_ativ[laps_ativ["pace_sec_km"].notna()].copy()
+                    laps_pace["Pace_fmt"] = laps_pace["pace_sec_km"].apply(fmt_pace)
+                    laps_pace["Pace_min"] = laps_pace["pace_sec_km"] / 60
+                    laps_pace["Lap"]      = laps_pace["lap_index"].astype(str)
+                    fig = go.Figure(go.Bar(
+                        x=laps_pace["Lap"], y=laps_pace["Pace_min"],
+                        text=laps_pace["Pace_fmt"], textposition="outside",
+                        marker_color=BLUE,
+                        customdata=laps_pace[["distance_m","Pace_fmt"]].values,
+                        hovertemplate="Lap %{x}<br>Pace: %{customdata[1]}/km<br>"
+                                      "Distância: %{customdata[0]:.0f}m<extra></extra>",
+                    ))
+                    set_pace_yaxis(fig, laps_pace["pace_sec_km"])
+                    fig.update_layout(title="⚡ Pace por Lap", xaxis_title="Lap")
+                    st.plotly_chart(fig, use_container_width=True)
+
+                # FC por lap
+                with col_b:
+                    laps_fc = laps_ativ[laps_ativ["average_heartrate"].notna()].copy()
+                    if not laps_fc.empty:
+                        fig = go.Figure()
+                        fig.add_scatter(
+                            x=laps_fc["lap_index"].astype(str),
+                            y=laps_fc["average_heartrate"],
+                            mode="lines+markers+text",
+                            text=laps_fc["average_heartrate"].apply(lambda x: f"{x:.0f}"),
+                            textposition="top center",
+                            line=dict(color=RED, width=2),
+                            marker=dict(size=8),
+                            name="FC Média",
+                        )
+                        if laps_fc["max_heartrate"].notna().any():
+                            fig.add_scatter(
+                                x=laps_fc["lap_index"].astype(str),
+                                y=laps_fc["max_heartrate"],
+                                mode="lines",
+                                line=dict(color=RED, width=1, dash="dot"),
+                                name="FC Máx",
+                                opacity=0.5,
+                            )
+                        fig.update_layout(title="❤️ FC por Lap",
+                                          xaxis_title="Lap", yaxis_title="bpm")
+                        st.plotly_chart(fig, use_container_width=True)
+                    else:
+                        st.info("FC não disponível para esta atividade.")
+
+                # Tabela de laps
+                cols_lap = {
+                    "lap_index":          "Lap",
+                    "distance_m":         "Distância (m)",
+                    "moving_time_sec":    "Tempo",
+                    "pace_sec_km":        "Pace",
+                    "average_heartrate":  "FC Média",
+                    "max_heartrate":      "FC Máx",
+                    "total_elevation_gain": "Elev (m)",
+                    "average_cadence":    "Cadência",
+                }
+                df_laps_tab = laps_ativ[[c for c in cols_lap if c in laps_ativ.columns]].copy()
+                df_laps_tab["pace_sec_km"]     = df_laps_tab["pace_sec_km"].apply(fmt_pace)
+                df_laps_tab["moving_time_sec"] = df_laps_tab["moving_time_sec"].apply(
+                    lambda x: f"{int(x//60)}:{int(x%60):02d}" if not pd.isna(x) else "—")
+                df_laps_tab["distance_m"]      = df_laps_tab["distance_m"].apply(
+                    lambda x: f"{x:.0f}" if not pd.isna(x) else "—")
+                df_laps_tab["average_heartrate"] = df_laps_tab["average_heartrate"].apply(
+                    lambda x: f"{x:.0f}" if not pd.isna(x) else "—")
+                df_laps_tab["max_heartrate"]   = df_laps_tab["max_heartrate"].apply(
+                    lambda x: f"{x:.0f}" if not pd.isna(x) else "—")
+                df_laps_tab["total_elevation_gain"] = df_laps_tab["total_elevation_gain"].apply(
+                    lambda x: f"{x:.1f}" if not pd.isna(x) else "—")
+                df_laps_tab["average_cadence"] = df_laps_tab["average_cadence"].apply(
+                    lambda x: f"{x*2:.0f} spm" if not pd.isna(x) else "—")
+                df_laps_tab = df_laps_tab.rename(columns=cols_lap)
+                st.dataframe(df_laps_tab, hide_index=True, use_container_width=True)
         
 # comando para rodar: streamlit run c:/Users/gamsc209/Documents/ProjetosPyGit/strava/app.py
