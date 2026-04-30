@@ -307,7 +307,9 @@ int_opts = [i for i in INTENSITY_ORDER
 sel_int  = st.sidebar.multiselect("Filtrar Intensidade", int_opts, default=int_opts)
 
 s_dt = pd.Timestamp(date_range[0]) if len(date_range) >= 1 else pd.Timestamp(min_d)
-e_dt = pd.Timestamp(date_range[1]) if len(date_range) == 2 else pd.Timestamp(max_d)
+# Adiciona 23:59:59 ao dia final para incluir atividades em qualquer horário do dia
+e_dt = (pd.Timestamp(date_range[1]) + pd.Timedelta(hours=23, minutes=59, seconds=59)) \
+       if len(date_range) == 2 else (pd.Timestamp(max_d) + pd.Timedelta(hours=23, minutes=59, seconds=59))
 
 def filt_act(d):
     mask = ((d["start_date"] >= s_dt) & (d["start_date"] <= e_dt)
@@ -1260,6 +1262,5 @@ with tab_coach:
                       labels={"FC":"bpm","SemanaStr":""})
         fig.update_layout(xaxis_tickangle=-45)
         st.plotly_chart(fig, use_container_width=True)
-        
         
 # comando para rodar: streamlit run c:/Users/gamsc209/Documents/ProjetosPyGit/strava/app.py
