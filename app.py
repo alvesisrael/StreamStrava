@@ -365,10 +365,11 @@ def melhor_3km():
 # ══════════════════════════════════════════════════════════════════════════════
 #  ABAS
 # ══════════════════════════════════════════════════════════════════════════════
-tab_geral, tab_perf, tab_fc, tab_intel, tab_elev, tab_clima, tab_metas, tab_vol, tab_coach = st.tabs([
+tab_geral, tab_perf, tab_fc, tab_intel, tab_elev, tab_clima, tab_metas, tab_vol, tab_coach, tab_hist = st.tabs([
     "📊 Visão Geral","⚡ Performance e Pace","❤️ Frequência Cardíaca",
     "🧠 Inteligência de Treino","⛰️ Elevação","🌤️ Clima",
     "🎯 Metas e Benchmarks","📈 Volume e Evolução","🧑‍🏫 Visão Treinador",
+    "📋 Histórico",
 ])
 
 
@@ -1262,5 +1263,85 @@ with tab_coach:
                       labels={"FC":"bpm","SemanaStr":""})
         fig.update_layout(xaxis_tickangle=-45)
         st.plotly_chart(fig, use_container_width=True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  10 · HISTÓRICO DE CORRIDAS
+# ══════════════════════════════════════════════════════════════════════════════
+with tab_hist:
+    st.title("📋 Histórico de Corridas")
+
+    if df_run.empty:
+        st.info("Nenhuma atividade encontrada para o período selecionado.")
+    else:
+        busca = st.text_input("🔍 Buscar por nome",
+                              placeholder="ex: regenerativo, prova, longo...")
+        df_hv = df_run.copy()
+        if busca:
+            df_hv = df_hv[df_hv["name"].str.contains(busca, case=False, na=False)]
+
+        st.caption(f"{len(df_hv)} atividades no período")
+
+        # Timeline scatter — tamanho = distância, cor = intensidade
+        df_sc = df_hv[df_hv["pace_sec_km"].notna()].copy()
+        df_sc["Pace_fmt"]  = df_sc["pace_sec_km"].apply(fmt_pace)
+        df_sc["Pace_min"]  = df_sc["pace_sec_km"] / 60
+        df_sc["Tempo_fmt"] = (df_sc["moving_time_sec"] / 60).apply(
+            lambda x: f"{int(x//60)}h{int(x%60):02d}m" if not pd.isna(x) and x >= 60
+            else f"{int(x)}min" if not pd.isna(x) else "—")
+        df_sc["Data_str"]  = df_sc["start_date"].dt.strftime("%d/%m/%Y")
+
+        fig = px.scatter(
+            df_sc,
+            x="start_date", y="Pace_min",
+            size="distance_km", size_max=28,
+            color="Intensidade" if "Intensidade" in df_sc.columns else None,
+            color_discrete_map=INTENSITY_COLORS,
+            category_orders={"Intensidade": INTENSITY_ORDER},
+            custom_data=["name","Data_str","distance_km","Pace_fmt",
+                         "Tempo_fmt","elevation_gain"],
+            title="📍 Timeline — tamanho = distância · cor = intensidade",
+            labels={"start_date":"","Pace_min":"Pace (min/km)"},
+            opacity=0.85,
+        )
+        fig.update_traces(hovertemplate=(
+            "<b>%{customdata[0]}</b><br>"
+            "%{customdata[1]}<br>"
+            "📏 %{customdata[2]:.1f} km  ·  ⚡ %{customdata[3]}/km<br>"
+            "⏱️ %{customdata[4]}  ·  ⛰️ %{customdata[5]:.0f} m"
+            "<extra></extra>"))
+        set_pace_yaxis(fig, df_sc["pace_sec_km"])
+        fig.update_layout(xaxis_title="")
+        st.plotly_chart(fig, use_container_width=True)
+        st.caption("📖 Passe o mouse sobre cada ponto para ver os detalhes da corrida. "
+                   "Eixo Y invertido — pontos mais altos = pace mais rápido.")
+
+        st.markdown("---")
+
+        # Tabela formatada com todas as atividades
+        cols = {"start_date":"Data","name":"Atividade","distance_km":"km",
+                "moving_time_sec":"Tempo","pace_sec_km":"Pace",
+                "average_heartrate":"FC Média","elevation_gain":"Elev (m)",
+                "calories":"Calorias"}
+        if "Intensidade" in df_hv.columns:
+            cols["Intensidade"] = "Intensidade"
+
+        df_tab = df_hv[[c for c in cols if c in df_hv.columns]].copy()
+        df_tab = df_tab.sort_values("start_date", ascending=False)
+        df_tab["start_date"]        = df_tab["start_date"].dt.strftime("%d/%m/%Y %H:%M")
+        df_tab["pace_sec_km"]       = df_tab["pace_sec_km"].apply(fmt_pace)
+        df_tab["moving_time_sec"]   = (df_tab["moving_time_sec"] / 60).apply(
+            lambda x: f"{int(x//60)}h{int(x%60):02d}m" if not pd.isna(x) and x >= 60
+            else f"{int(x)}min" if not pd.isna(x) else "—")
+        df_tab["distance_km"]       = df_tab["distance_km"].apply(
+            lambda x: f"{x:.2f}" if not pd.isna(x) else "—")
+        df_tab["average_heartrate"] = df_tab["average_heartrate"].apply(
+            lambda x: f"{int(x)} bpm" if not pd.isna(x) else "—")
+        df_tab["elevation_gain"]    = df_tab["elevation_gain"].apply(
+            lambda x: f"{x:.0f}" if not pd.isna(x) else "—")
+        df_tab["calories"]          = df_tab["calories"].apply(
+            lambda x: f"{int(x)}" if not pd.isna(x) else "—")
+        df_tab = df_tab.rename(columns=cols)
+        st.dataframe(df_tab, hide_index=True, use_container_width=True)
         
 # comando para rodar: streamlit run c:/Users/gamsc209/Documents/ProjetosPyGit/strava/app.py
