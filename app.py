@@ -1260,3 +1260,6 @@ with tab_coach:
                       labels={"FC":"bpm","SemanaStr":""})
         fig.update_layout(xaxis_tickangle=-45)
         st.plotly_chart(fig, use_container_width=True)
+        
+        
+# comando para rodar: streamlit run c:/Users/gamsc209/Documents/ProjetosPyGit/strava/app.py
