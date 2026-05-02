@@ -1594,8 +1594,9 @@ with tab_mapa:
         df_map = df_map[df_map[poly_col].notna() & (df_map[poly_col].astype(str).str.len() > 4)]
     df_map = df_map.sort_values("start_date", ascending=False)
 
+    st.write(f"DEBUG: df_raw={len(df_raw)} | df={len(df)} | df_run={len(df_run)} | df_map={len(df_map)}")
+
     if df_map.empty:
-        st.write(f"DEBUG: df_raw={len(df_raw)} | df={len(df)} | df_run={len(df_run)} | df_map={len(df_map)}")
         st.warning("Nenhuma atividade com dados de GPS no periodo selecionado.")
     else:
         def _make_label(row):
