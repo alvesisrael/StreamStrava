@@ -1562,29 +1562,6 @@ with tab_mapa:
     has_ll   = "latitude" in df_run.columns and "longitude" in df_run.columns
 
     # ── Cards de analise ────────────────────────────────────────────────────
-    with st.expander("\U0001f4a1 O que voce pode analisar com dados de GPS"):
-        st.caption("Perguntas respondíveis combinando GPS + FC + elevacao do Strava.")
-        INSIGHTS_MAP = [
-            ("⚡","Em qual trecho perco velocidade?","Heatmap de pace por segmento — identifica onde voce desacelera sistematicamente.","Folium","#185FA5"),
-            ("❤️","Onde minha FC dispara nas subidas?","Overlay FC + elevacao ponto a ponto ao longo do percurso.","Ambos","#0F6E56"),
-            ("\U0001f4c8","Evoluo no mesmo percurso?","Mesmo tracado em datas diferentes — a mudanca de cor revela a evolucao.","Folium","#185FA5"),
-            ("\U0001f3d4️","Onde acumulo mais elevacao?","ColumnLayer 3D — colunas por segmento com cor por dificuldade.","Pydeck","#854F0B"),
-            ("\U0001f525","Onde treino com mais frequencia?","HexagonLayer gera mapa de densidade dos pontos GPS historicos.","Pydeck","#854F0B"),
-            ("\U0001f504","Tiro vs leve no mesmo percurso","Duas polylines sobrepostas — mostra onde os paces divergem.","Folium","#185FA5"),
-            ("\U0001f4a7","Como o calor afeta meu pace?","Scatter de pace por segmento colorido por temperatura do dia.","Ambos","#0F6E56"),
-            ("\U0001f3c5","Onde bato PR por segmento?","Marca onde supera o pace recorde historico naquele trecho.","Ambos","#0F6E56"),
-        ]
-        BADGE_COLORS = {"Folium":"#185FA5","Pydeck":"#854F0B","Ambos":"#0F6E56"}
-        cols_ins = st.columns(4)
-        for idx,(icon,title,desc,badge,_) in enumerate(INSIGHTS_MAP):
-            with cols_ins[idx % 4]:
-                bcol = BADGE_COLORS[badge]
-                with st.container(border=True):
-                    st.markdown(f"**{icon}\xa0 {title}**")
-                    st.caption(desc)
-                    st.markdown(f"<span style='font-size:10px;padding:2px 8px;border-radius:8px;font-weight:500;background:{bcol}22;color:{bcol}'>{badge}</span>", unsafe_allow_html=True)
-
-    st.markdown("---")
 
     if not has_ll and poly_col is None:
         st.error("Nenhum dado de GPS encontrado.")
@@ -1611,7 +1588,7 @@ with tab_mapa:
         if _n <= 5:
             max_runs = _n
         else:
-            max_runs = st.slider("Numero maximo de atividades", 5, min(100, _n), min(20, _n))
+            max_runs = st.slider("Numero maximo de atividades", 5, min(200, _n), min(50, _n))
         df_map = df_map.head(max_runs)
 
         lat_c = float(df_map["latitude"].mean()) if has_ll else -23.55
