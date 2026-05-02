@@ -1766,69 +1766,114 @@ with tab_mapa:
                         "font-size:11px;color:#444'>" + it + "</div></div>"
                     )
 
+                def _lap_popup_html(lap, r):
+                    ln  = int(lap.get("lap_index", 0) or 0)
+                    dk  = round(float(lap.get("distance_km") or 0), 2)
+                    pc  = fmt_pace(lap.get("pace_sec_km") or 0)
+                    hr  = int(lap.get("average_heartrate") or 0) or "—"
+                    hrm = int(lap.get("max_heartrate") or 0) or "—"
+                    elv = float(lap.get("total_elevation_gain") or 0)
+                    cad = int(float(lap.get("average_cadence") or 0) * 2) or "—"
+                    ci  = r["color_hex"]
+                    rows = (
+                        "<tr><td style='color:#888;padding:1px 8px 1px 0'>Pace</td>"
+                        "<td><b>" + pc + "/km</b></td></tr>"
+                        "<tr><td style='color:#888;padding:1px 8px 1px 0'>FC média</td>"
+                        "<td><b>" + str(hr) + " bpm</b></td></tr>"
+                        "<tr><td style='color:#888;padding:1px 8px 1px 0'>FC máx</td>"
+                        "<td><b>" + str(hrm) + " bpm</b></td></tr>"
+                        "<tr><td style='color:#888;padding:1px 8px 1px 0'>Elevação</td>"
+                        "<td><b>" + f"{elv:.0f}" + " m</b></td></tr>"
+                        + (f"<tr><td style='color:#888;padding:1px 8px 1px 0'>Cadência</td>"
+                           f"<td><b>{cad} spm</b></td></tr>" if cad != "—" else "")
+                    )
+                    return (
+                        "<div style='font-family:sans-serif;min-width:170px;padding:2px'>"
+                        "<b style='font-size:12px'>" + r["name"][:25] + "</b>"
+                        "<span style='color:#888;font-size:10px'> · " + r["date"] + "</span><br>"
+                        "<div style='margin:4px 0 6px;padding:2px 7px;border-radius:4px;"
+                        "background:" + ci + "20;border-left:3px solid " + ci + ";"
+                        "font-size:11px;font-weight:600'>Lap " + str(ln) + " · " + str(dk) + " km</div>"
+                        "<table style='font-size:11px;width:100%'>" + rows + "</table></div>"
+                    )
+                
                 for r in _routes_snap:
                     _fg_name = r["date"] + " — " + r["name"][:20] + " (" + str(r["km"]) + "km)"
                     fg = folium.FeatureGroup(name=_fg_name, show=True)
-                    pop = folium.Popup(_popup(r), max_width=220)
 
                     if _poly_snap and r["coords"]:
+                        coords_all = r["coords"]
+                        n_pts = len(coords_all) - 1
                         act_laps = (
                             _lps_snap[_lps_snap["activity_id"] == r["id"]]
                             .sort_values("lap_index")
                             if not _lps_snap.empty else pd.DataFrame())
 
+                        # ── VISUAL: animação colorida por modo ──────────────
                         if mode_map == "Intensidade":
                             if _ant:
-                                AntPath(r["coords"], color=r["color_hex"], weight=4.5,
-                                        dash_array=[12, 20], delay=800, opacity=0.92,
-                                        popup=pop).add_to(fg)
+                                AntPath(coords_all, color=r["color_hex"], weight=4.5,
+                                        dash_array=[12, 20], delay=800, opacity=0.92).add_to(fg)
                             else:
-                                folium.PolyLine(r["coords"], color=r["color_hex"],
-                                               weight=4.5, opacity=0.9,
-                                               popup=pop).add_to(fg)
+                                folium.PolyLine(coords_all, color=r["color_hex"],
+                                               weight=4.5, opacity=0.9).add_to(fg)
+                        elif not act_laps.empty and n_pts > 0:
+                            total_km = act_laps["distance_km"].sum()
+                            cum = 0.0
+                            for _, lap in act_laps.iterrows():
+                                frac = (float(lap["distance_km"]) / total_km
+                                        if total_km > 0 else 1 / len(act_laps))
+                                i0 = int(cum * n_pts)
+                                i1 = min(n_pts, int((cum + frac) * n_pts) + 1)
+                                seg = coords_all[i0:i1 + 1]
+                                if len(seg) >= 2:
+                                    cseg = _seg_color(lap, r, mode_map)
+                                    if _ant:
+                                        AntPath(seg, color=cseg, weight=5,
+                                                dash_array=[12, 20], delay=800,
+                                                opacity=0.9).add_to(fg)
+                                    else:
+                                        folium.PolyLine(seg, color=cseg,
+                                                       weight=5, opacity=0.9).add_to(fg)
+                                cum += frac
                         else:
-                            coords_all = r["coords"]
-                            n_pts = len(coords_all) - 1
-                            if not act_laps.empty and n_pts > 0:
-                                total_km = act_laps["distance_km"].sum()
-                                cum = 0.0
-                                for _, lap in act_laps.iterrows():
-                                    frac = (float(lap["distance_km"]) / total_km
-                                            if total_km > 0 else 1 / len(act_laps))
-                                    i0 = int(cum * n_pts)
-                                    i1 = min(n_pts, int((cum + frac) * n_pts) + 1)
-                                    seg = coords_all[i0:i1 + 1]
-                                    if len(seg) >= 2:
-                                        cseg = _seg_color(lap, r, mode_map)
-                                        if _ant:
-                                            AntPath(seg, color=cseg, weight=5,
-                                                    dash_array=[12, 20], delay=800,
-                                                    opacity=0.9).add_to(fg)
-                                        else:
-                                            folium.PolyLine(seg, color=cseg,
-                                                           weight=5, opacity=0.9).add_to(fg)
-                                    cum += frac
+                            cseg = _seg_color({}, r, mode_map)
+                            if _ant:
+                                AntPath(coords_all, color=cseg, weight=5,
+                                        dash_array=[12, 20], delay=800, opacity=0.9).add_to(fg)
                             else:
-                                cseg = _seg_color({}, r, mode_map)
-                                if _ant:
-                                    AntPath(coords_all, color=cseg, weight=5,
-                                            dash_array=[12, 20], delay=800,
-                                            opacity=0.9).add_to(fg)
-                                else:
-                                    folium.PolyLine(coords_all, color=cseg,
-                                                   weight=5, opacity=0.9).add_to(fg)
+                                folium.PolyLine(coords_all, color=cseg,
+                                               weight=5, opacity=0.9).add_to(fg)
 
-                        # Km markers ao longo da rota
-                        _add_km_markers(r["coords"], r["color_hex"], fg)
-                        # Overlay invisível para popup em todos os modos de cor
-                        folium.PolyLine(
-                            r["coords"], color=r["color_hex"],
-                            weight=8, opacity=0.001, popup=pop
-                        ).add_to(fg)
+                        # ── INTERATIVO: overlays invisíveis com popup por lap ──
+                        if not act_laps.empty and n_pts > 0:
+                            total_km = act_laps["distance_km"].sum()
+                            cum = 0.0
+                            for _, lap in act_laps.iterrows():
+                                frac = (float(lap["distance_km"]) / total_km
+                                        if total_km > 0 else 1 / len(act_laps))
+                                i0 = int(cum * n_pts)
+                                i1 = min(n_pts, int((cum + frac) * n_pts) + 1)
+                                seg = coords_all[i0:i1 + 1]
+                                if len(seg) >= 2:
+                                    folium.PolyLine(
+                                        seg, color=r["color_hex"],
+                                        weight=10, opacity=0.001,
+                                        popup=folium.Popup(_lap_popup_html(lap, r), max_width=220)
+                                    ).add_to(fg)
+                                cum += frac
+                        else:
+                            # Sem dados de lap — popup da atividade como fallback
+                            folium.PolyLine(
+                                coords_all, color=r["color_hex"],
+                                weight=8, opacity=0.001,
+                                popup=folium.Popup(_popup(r), max_width=220)
+                            ).add_to(fg)
 
-                        
+                        # ── KM MARKERS ──────────────────────────────────────
+                        _add_km_markers(coords_all, r["color_hex"], fg)
                         folium.CircleMarker(
-                            r["coords"][0], radius=6, color=r["color_hex"],
+                            coords_all[0], radius=6, color=r["color_hex"],
                             fill=True, fill_opacity=1, weight=2,
                             tooltip="Início").add_to(fg)
                     else:
@@ -1836,7 +1881,7 @@ with tab_mapa:
                             [r["lat"], r["lng"]],
                             radius=max(5, min(16, r["km"] * 0.9)),
                             color=r["color_hex"], fill=True, fill_opacity=0.8,
-                            popup=pop).add_to(fg)
+                            popup=folium.Popup(_popup(r), max_width=220)).add_to(fg)
 
                     fg.add_to(m)
 
