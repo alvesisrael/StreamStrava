@@ -1596,8 +1596,6 @@ with tab_mapa:
         df_map = df_map[df_map["latitude"].notna() & df_map["longitude"].notna()]
 
 
-    st.write(f"poly_col='{poly_col}' | poly_count={(df_raw[poly_col].astype(str).str.len() > 4).sum() if poly_col else 0} | lat_count={df_run['latitude'].notna().sum() if 'latitude' in df_run.columns else 0}")
-
     if df_map.empty:
         st.warning("Nenhuma atividade com dados de GPS no periodo selecionado.")
     else:
@@ -1724,6 +1722,25 @@ with tab_mapa:
                         return elev_gain_to_hex(e / d if d > 0 else 0)
                     return r["color_hex"]
 
+                def _add_km_markers(coords, color, fg):
+                    import math
+                    def _hav(c1, c2):
+                        la1,lo1=math.radians(c1[0]),math.radians(c1[1])
+                        la2,lo2=math.radians(c2[0]),math.radians(c2[1])
+                        d=math.sin((la2-la1)/2)**2+math.cos(la1)*math.cos(la2)*math.sin((lo2-lo1)/2)**2
+                        return 2*6371*math.asin(math.sqrt(d))
+                    cum, last = 0.0, 0
+                    for i in range(1, len(coords)):
+                        cum += _hav(coords[i-1], coords[i])
+                        if int(cum) > last:
+                            last = int(cum)
+                            folium.Marker(coords[i], icon=folium.DivIcon(
+                                html=f'<div style="font-size:9px;font-weight:700;color:#fff;'
+                                     f'background:{color};padding:1px 5px;border-radius:10px;'
+                                     f'box-shadow:0 1px 3px rgba(0,0,0,.5)">{last}</div>',
+                                icon_size=(22,15), icon_anchor=(11,7)
+                            )).add_to(fg)
+                            
                 def _popup(r):
                     n = r["name"][:30]
                     dt = r["date"]
@@ -1801,6 +1818,15 @@ with tab_mapa:
                                     folium.PolyLine(coords_all, color=cseg,
                                                    weight=5, opacity=0.9).add_to(fg)
 
+                        # Km markers ao longo da rota
+                        _add_km_markers(r["coords"], r["color_hex"], fg)
+                        # Overlay invisível para popup em todos os modos de cor
+                        folium.PolyLine(
+                            r["coords"], color=r["color_hex"],
+                            weight=8, opacity=0.001, popup=pop
+                        ).add_to(fg)
+
+                        
                         folium.CircleMarker(
                             r["coords"][0], radius=6, color=r["color_hex"],
                             fill=True, fill_opacity=1, weight=2,
