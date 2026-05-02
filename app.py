@@ -1700,22 +1700,22 @@ with tab_mapa:
                 leg_title = "Intensidade"
             else:
                 leg_items = ("<div style='display:flex;align-items:center;gap:6px'>"
-                             "<span>lento</span>"
+                             "<span style='color:rgba(255,255,255,0.8)'>lento</span>"
                              "<div style='width:50px;height:5px;border-radius:3px;"
                              "background:linear-gradient(to right,rgb(231,76,60),rgb(46,204,113))'></div>"
-                             "<span>rapido</span></div>")
+                             "<span style='color:rgba(255,255,255,0.8)'>rapido</span></div>")
                 leg_title = "Pace"
 
             legend_html = (
                 f"<div style='position:absolute;bottom:36px;right:8px;z-index:9999;"
-                f"background:white;padding:10px 14px;border-radius:8px;font-size:12px;"
-                f"box-shadow:0 1px 6px rgba(0,0,0,.2);max-width:150px'>"
-                f"<div style='font-weight:600;margin-bottom:6px'>{leg_title}</div>"
+                f"background:rgba(10,10,10,0.68);padding:10px 14px;border-radius:10px;"
+                f"font-size:12px;max-width:158px'>"
+                f"{leg_title}"
                 f"{leg_items}</div>"
             )
             m.get_root().html.add_child(folium.Element(legend_html))
 
-            st_folium(m, use_container_width=True, height=500)
+            st_folium(m, use_container_width=True, height=500, returned_objects=[])
             hint = "Clique numa rota para detalhes" if poly_col else "Tamanho = distancia"
             st.caption(f"{hint} · Use o controle superior direito para alternar rotas · "
                        f"{'AntPath animado ativo' if _use_ant else 'Instale folium.plugins para animacao'}")
