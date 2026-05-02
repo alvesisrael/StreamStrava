@@ -416,7 +416,9 @@ def filt_act(d):
     mask = ((d["start_date"] >= s_dt) & (d["start_date"] <= e_dt)
             & d["sport_type"].isin(selected_sports))
     if sel_int and int_col in d.columns:
-        mask &= d[int_col].isin(sel_int)
+        # Inclui atividades sem intensidade calculada (NaN = sem FC ou sem laps)
+        # Só exclui quando a intensidade É conhecida e NÃO está selecionada
+        mask &= d[int_col].isin(sel_int) | d[int_col].isna()
     return d[mask].copy()
 
 def filt_laps(d):
