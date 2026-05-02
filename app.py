@@ -374,8 +374,18 @@ pmc_raw = calc_pmc(_runs_raw)
 st.sidebar.title("🎛️ Filtros")
 min_d = df_raw["start_date"].min().date()
 max_d = df_raw["start_date"].max().date()
-date_range = st.sidebar.date_input("Período", value=(min_d, max_d),
-                                    min_value=min_d, max_value=max_d)
+
+_col1, _col2 = st.sidebar.columns([3, 1])
+with _col1:
+    st.markdown("**Período**")
+with _col2:
+    if st.button("↺", help="Resetar para o período completo", key="reset_date"):
+        st.session_state["date_range"] = (min_d, max_d)
+
+date_range = st.sidebar.date_input(
+    "Período", value=st.session_state.get("date_range", (min_d, max_d)),
+    min_value=min_d, max_value=max_d, key="date_range",
+    label_visibility="collapsed")
 sports_all      = sorted(df_raw["sport_type"].dropna().unique())
 _default_sports = [s for s in ["Run","TrailRun"] if s in sports_all]
 if not _default_sports:
@@ -1590,6 +1600,7 @@ with tab_mapa:
         else:
             max_runs = st.slider("Numero maximo de atividades", 5, min(200, _n), min(50, _n))
         df_map = df_map.head(max_runs)
+        st.caption(f"Exibindo **{len(df_map)}** atividades com GPS · ajuste o período na sidebar ou o slider acima para ver mais.")
 
         lat_c = float(df_map["latitude"].mean()) if has_ll else -23.55
         lng_c = float(df_map["longitude"].mean()) if has_ll else -46.63
