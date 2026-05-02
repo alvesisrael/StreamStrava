@@ -1601,7 +1601,7 @@ with tab_mapa:
         if _n <= 5:
             max_runs = _n
         else:
-            max_runs = st.slider("Numero maximo de atividades", 5, min(200, _n), min(50, _n))
+            max_runs = st.slider("Numero maximo de atividades"
         df_map = df_map.head(max_runs)
         st.caption(f"Exibindo **{len(df_map)}** atividades com GPS · ajuste o período na sidebar ou o slider acima para ver mais.")
 
