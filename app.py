@@ -1544,8 +1544,12 @@ with tab_mapa:
         if df_map.empty:
             st.warning("Nenhuma atividade com dados de GPS no periodo selecionado.")
         else:
-            max_runs = st.slider("Numero maximo de atividades",
-                                 5, min(100, len(df_map)), min(30, len(df_map)))
+            _n = len(df_map)
+            if _n <= 5:
+                max_runs = _n
+            else:
+                max_runs = st.slider("Numero maximo de atividades",
+                                     5, min(100, _n), min(30, _n))
             df_map = df_map.head(max_runs)
 
             mode_choice = st.radio("Colorir por", ["Intensidade","Pace medio"], horizontal=True)
