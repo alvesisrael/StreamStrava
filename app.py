@@ -1597,13 +1597,34 @@ with tab_mapa:
     if df_map.empty:
         st.warning("Nenhuma atividade com dados de GPS no periodo selecionado.")
     else:
-        _n = len(df_map)
-        if _n <= 5:
-            max_runs = _n
-        else:
-            max_runs = st.slider("Numero maximo de atividades"
-        df_map = df_map.head(max_runs)
-        st.caption(f"Exibindo **{len(df_map)}** atividades com GPS · ajuste o período na sidebar ou o slider acima para ver mais.")
+        def _make_label(row):
+            ...
+            dt    = row["start_date"].strftime("%d/%m/%Y")
+            nm    = str(row.get("name") or "")[:35]
+            km    = round(float(row.get("distance_km") or 0), 1)
+            int_v = str(row.get("Intensidade") or "")
+            int_tag = f" [{int_v}]" if int_v and int_v != "None" else ""
+            return f"{dt} — {nm} ({km}km){int_tag}"
+
+        _label_to_id = {_make_label(row): row["id"] for _, row in df_map.iterrows()}
+        _all_labels  = list(_label_to_id.keys())
+
+        sel_labels = st.multiselect(
+            "Selecione atividades para exibir e comparar",
+            options=_all_labels,
+            default=_all_labels[:min(10, len(_all_labels))],
+            help="Digite para buscar por nome, data ou distância.",
+            placeholder="Busque por nome, data ou distância...",
+        )
+
+        if not sel_labels:
+            st.info("Selecione ao menos uma atividade acima para ver o mapa.")
+            st.stop()
+
+        _sel_ids = [_label_to_id[l] for l in sel_labels]
+        df_map   = df_map[df_map["id"].isin(_sel_ids)].copy()
+        st.caption(f"**{len(df_map)}** atividade(s) · {len(_all_labels)} disponíveis no período")
+
 
         lat_c = float(df_map["latitude"].mean()) if has_ll else -23.55
         lng_c = float(df_map["longitude"].mean()) if has_ll else -46.63
