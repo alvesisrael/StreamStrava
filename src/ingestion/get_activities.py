@@ -188,6 +188,7 @@ def extract_fields(activity, detail=None, streams=None):
         "achievement_count": activity.get("achievement_count"),
         "latitude":          latitude,
         "longitude":         longitude,
+        "map_summary_polyline": (activity.get("map") or {}).get("summary_polyline", ""),
     }
 
     if detail:
@@ -199,7 +200,8 @@ def extract_fields(activity, detail=None, streams=None):
             "device_name":        detail.get("device_name"),
             "average_watts":      detail.get("average_watts"),
             "weighted_avg_watts": detail.get("weighted_average_watts"),
-            "workout_type":       detail.get("workout_type"),  # ✅ NOVO
+            "workout_type":       detail.get("workout_type"),
+            "map_polyline":       (detail.get("map") or {}).get("polyline", ""),
         })
 
     distance_km = record.get("distance_km", 0)

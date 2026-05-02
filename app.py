@@ -270,6 +270,9 @@ def load_all(base):
         act["Semana"]     = act["start_date"].dt.to_period("W").apply(lambda x: x.ordinal)
         act["SemanaStr"]  = act["start_date"].dt.strftime("Sem %V/%Y")
         act["DiaSemana"]  = act["start_date"].dt.day_name().map(DIAS_PT)
+        for _c in ["latitude","longitude"]:
+            if _c in act.columns:
+                act[_c] = pd.to_numeric(act[_c], errors="coerce")
         rename_map = {c: "Intensidade" for c in act.columns if c.lower() == "intensidade"}
         act = act.rename(columns=rename_map)
         if "Intensidade" in act.columns:
@@ -431,7 +434,7 @@ with tab_geral:
                      labels={"KM":"km","MesAno":""}, text_auto=".0f")
         fig.update_traces(textposition="outside")
         fig.update_layout(xaxis_tickangle=-45, showlegend=False)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     with col_b:
         if "Intensidade" in df.columns and df["Intensidade"].notna().any():
@@ -443,7 +446,7 @@ with tab_geral:
                          color="Intensidade", color_discrete_map=INTENSITY_COLORS,
                          category_orders={"Intensidade": INTENSITY_ORDER})
             fig.update_traces(textposition="inside", textinfo="percent+label")
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
             label = "🤖 Automática (FC)" if int_mode == "Automática (FC)" else "✍️ Manual"
             with st.expander(f"Como cada categoria é definida? — {label}"):
@@ -482,7 +485,7 @@ with tab_geral:
     set_pace_yaxis(fig, df_p["Pace"])
     fig.update_layout(title="⚡ Evolução do Pace Médio + Média Móvel 3M",
                       xaxis_tickangle=-45)
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
     st.caption("📖 Eixo Y invertido: quanto mais alto no gráfico, mais rápido.")
 
     if len(df_p) >= 2:
@@ -502,7 +505,7 @@ with tab_geral:
                  title="📅 Atividades por Dia da Semana",
                  color_discrete_sequence=[PURPLE], text_auto=True)
     fig.update_layout(showlegend=False)
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -538,7 +541,7 @@ with tab_perf:
                 hovertemplate="<b>%{x}</b><br>Melhor pace: %{customdata[0]}/km<extra></extra>")
             set_pace_yaxis(fig, be_best["Pace"])
             fig.update_layout(xaxis_tickangle=-45)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
     col_a, col_b = st.columns(2)
 
@@ -561,7 +564,7 @@ with tab_perf:
                 )
             set_pace_yaxis(fig, df_agg["Media"])
             fig.update_layout(title="🎯 Pace Médio por Intensidade", showlegend=False)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
             st.caption("Barra = pace médio. Traço vertical = desvio padrão.")
 
     with col_b:
@@ -576,7 +579,7 @@ with tab_perf:
                          opacity=0.65,
                          labels={"distance_km":"Distância (km)","Pace_min":"Pace (min/km)"})
         set_pace_yaxis(fig, df_s["pace_sec_km"])
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     df_ef = (df_run[df_run["efficiency_index"].notna()]
              .groupby(["MesAnoOrd","MesAno"])
@@ -588,7 +591,7 @@ with tab_perf:
                       color_discrete_sequence=[GREEN],
                       labels={"Ef":"Eficiência","MesAno":""})
         fig.update_layout(xaxis_tickangle=-45)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -632,7 +635,7 @@ with tab_fc:
                          labels={"Pct":"% Tempo","Zona FC":""})
             fig.update_traces(textposition="outside")
             fig.update_layout(showlegend=False)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
             st.caption("📖 Z1 = regenerativo → Z5 = esforço máximo. "
                        "Ideal para base: >70% do tempo em Z1+Z2.")
 
@@ -656,7 +659,7 @@ with tab_fc:
             fig.add_hline(y=10, line_dash="dot",  line_color=AMBER,
                           annotation_text="+10 bpm — atenção")
             fig.update_layout(xaxis_tickangle=-45)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
             if not df_deriv_m.empty:
                 last_drift = df_deriv_m["Deriva"].iloc[-1]
@@ -674,7 +677,7 @@ with tab_fc:
                       color_discrete_sequence=[RED],
                       labels={"FC":"bpm","MesAno":""})
         fig.update_layout(xaxis_tickangle=-45)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
         # ── NOVO: Distribuição de Zonas vs Modelo Polarizado ─────────────────
         st.markdown("---")
@@ -735,7 +738,7 @@ with tab_fc:
                 category_orders={"Zona FC": ZONA_ORDER})
             fig_at.update_traces(textinfo="percent+label", textposition="inside")
             fig_at.update_layout(showlegend=False)
-            st.plotly_chart(fig_at, use_container_width=True)
+            st.plotly_chart(fig_at, width="stretch")
 
         with col_p2:
             fig_id = px.pie(
@@ -747,7 +750,7 @@ with tab_fc:
                 category_orders={"Zona FC": ZONA_ORDER})
             fig_id.update_traces(textinfo="percent+label", textposition="inside")
             fig_id.update_layout(showlegend=False)
-            st.plotly_chart(fig_id, use_container_width=True)
+            st.plotly_chart(fig_id, width="stretch")
 
         st.caption(
             "📖 **Modelo polarizado (Seiler):** ~80% em Z1+Z2 (conversa fácil), "
@@ -816,7 +819,7 @@ with tab_intel:
             ))
             set_pace_yaxis(fig, df_agg2["Media"])
             fig.update_layout(title="📅 Pace Médio — 10 Treinos Mais Recentes")
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
         with col_b:
             df_hist = lps_run[lps_run["pace_sec_km"].notna()].copy()
@@ -826,7 +829,7 @@ with tab_intel:
                                color_discrete_sequence=[PURPLE],
                                labels={"Pace_min":"Pace (min/km)"})
             fig.update_yaxes(title="Nº de Laps")
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
         lps_cv = lps_run.merge(cv_df, on="activity_id")
         df_cv_m = (lps_cv.groupby(["MesAnoOrd","MesAno"])
@@ -841,7 +844,7 @@ with tab_intel:
         fig.add_hline(y=25, line_dash="dash", line_color=RED,
                       annotation_text="> 25% — treino intervalado")
         fig.update_layout(xaxis_tickangle=-45)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -878,7 +881,7 @@ with tab_elev:
                          labels={"Elev":"metros","MesAno":""}, text_auto=".0f")
             fig.update_traces(textposition="outside")
             fig.update_layout(xaxis_tickangle=-45, showlegend=False)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
         with col_b:
             fig = px.histogram(df_e, x="elevation_gain", nbins=30,
@@ -886,7 +889,7 @@ with tab_elev:
                                color_discrete_sequence=[AMBER],
                                labels={"elevation_gain":"Elevação (m)"})
             fig.update_yaxes(title="Nº de Atividades")
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
         col_a, col_b = st.columns(2)
 
@@ -903,7 +906,7 @@ with tab_elev:
                              labels={"elevation_gain":"Elevação (m)",
                                      "Pace_min":"Pace (min/km)"})
             set_pace_yaxis(fig, df_pe["pace_sec_km"])
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
         with col_b:
             df_fe = df_e[df_e["average_heartrate"].notna()].copy()
@@ -916,7 +919,7 @@ with tab_elev:
                              category_orders={"Intensidade": INTENSITY_ORDER},
                              labels={"elevation_gain":"Elevação (m)",
                                      "average_heartrate":"FC Média (bpm)"})
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
         top10 = (df_e.nlargest(10, "elevation_gain")
                      [["start_date","name","distance_km","elevation_gain","elev_km","pace_sec_km"]]
@@ -950,7 +953,7 @@ with tab_elev:
                              labels={"ElevTotal":"metros","Intensidade":""})
                 fig.update_traces(textposition="outside")
                 fig.update_layout(showlegend=False)
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
             with col_b:
                 fig = px.bar(df_ei, x="Intensidade", y="ElevMedia",
                              title="📐 Elevação Média por Atividade e Tipo",
@@ -960,7 +963,7 @@ with tab_elev:
                              labels={"ElevMedia":"metros","Intensidade":""})
                 fig.update_traces(textposition="outside")
                 fig.update_layout(showlegend=False)
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
 
         df_grad = (df_e.groupby(["MesAnoOrd","MesAno"])
                        .agg(Grad=("elev_km","mean")).reset_index()
@@ -970,7 +973,7 @@ with tab_elev:
                       color_discrete_sequence=[AMBER],
                       labels={"Grad":"m/km","MesAno":""})
         fig.update_layout(xaxis_tickangle=-45)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1016,7 +1019,7 @@ with tab_clima:
             fig.update_yaxes(autorange="reversed")
             fig.add_vrect(x0=18, x1=24, fillcolor=GREEN, opacity=0.07,
                           annotation_text="Zona Ideal")
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
         with col_b:
             bins   = [0,15,18,22,26,50]
@@ -1034,7 +1037,7 @@ with tab_clima:
             set_pace_yaxis(fig, df_f["Pace"].dropna())
             fig.update_traces(textposition="outside")
             fig.update_layout(showlegend=False)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
         if "weather_rain" in df_w.columns:
             pace_chuva = df_w[df_w["weather_rain"] > 0]["pace_sec_km"].mean()
@@ -1092,7 +1095,7 @@ with tab_metas:
                     hovertemplate="<b>%{x}</b><br>Melhor pace: %{customdata[0]}/km<extra></extra>")
                 set_pace_yaxis(fig, be_ev_m["Pace"])
                 fig.update_layout(xaxis_tickangle=-45)
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
 
         with col_b:
             pr_df = be[be["pr_rank"].notna()]
@@ -1103,7 +1106,7 @@ with tab_metas:
                              title="🏅 PRs Conquistados por Distância",
                              color_discrete_sequence=[AMBER], text_auto=True)
                 fig.update_layout(showlegend=False)
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
 
     df_meta = (df_run.groupby(["MesAnoOrd","MesAno"])
                      .agg(KM=("distance_km","sum"), Treinos=("id","count"))
@@ -1122,7 +1125,7 @@ with tab_metas:
     fig.add_hline(y=100, line_dash="dash", line_color=AMBER, annotation_text="Meta 100%")
     fig.update_layout(barmode="group", title="📊 % Metas Mensais — últimos 12 meses",
                       yaxis_title="%", xaxis_tickangle=-45)
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1140,7 +1143,7 @@ with tab_vol:
                       title="📏 Distância Acumulada",
                       color_discrete_sequence=[BLUE],
                       labels={"start_date":"","KM_Acum":"km"})
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     with col_b:
         df_sem = (df_run.groupby(["Semana","SemanaStr"])
@@ -1151,7 +1154,7 @@ with tab_vol:
                      color_discrete_sequence=[PURPLE], text_auto=".0f",
                      labels={"SemanaStr":"","KM":"km"})
         fig.update_layout(xaxis_tickangle=-45, showlegend=False)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     if "Intensidade" in df_run.columns:
         df_int_m = cat_intensity(
@@ -1164,7 +1167,7 @@ with tab_vol:
                      category_orders={"Intensidade": INTENSITY_ORDER},
                      labels={"KM":"km","MesAno":"","Intensidade":"Intensidade"})
         fig.update_layout(xaxis_tickangle=-45)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     df_mom = (df_run.groupby(["MesAnoOrd","MesAno"])
                     .agg(KM=("distance_km","sum")).reset_index()
@@ -1184,7 +1187,7 @@ with tab_vol:
     fig.add_hline(y=-10, line_color=AMBER, line_dash="dot")
     fig.update_layout(title="📊 Crescimento de Volume MoM (%)",
                       yaxis_title="%", xaxis_tickangle=-45)
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1250,7 +1253,7 @@ with tab_coach:
                           annotation_text="Zona Segura (0.8–1.3)")
             fig.add_hline(y=1.5, line_dash="dash", line_color=RED,
                           annotation_text="Risco Alto (1.5)")
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
     with col_b:
         if df_run["suffer_score"].notna().any():
@@ -1271,7 +1274,7 @@ with tab_coach:
             fig.add_hline(y=-10, line_dash="dash", line_color=AMBER)
             fig.update_layout(title="📊 Variação de Carga Semanal (%)",
                               xaxis_tickangle=-45, yaxis_title="%")
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
     df_fc8 = (df_run[df_run["average_heartrate"].notna()]
               .groupby(["Semana","SemanaStr"])
@@ -1289,7 +1292,7 @@ with tab_coach:
                       color_discrete_sequence=[RED],
                       labels={"FC":"bpm","SemanaStr":""})
         fig.update_layout(xaxis_tickangle=-45)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     # ── NOVO: PMC — CTL / ATL / TSB ──────────────────────────────────────────
     if not pmc_raw.empty:
@@ -1352,7 +1355,7 @@ with tab_coach:
                 legend=dict(orientation="h", y=-0.18),
                 hovermode="x unified",
             )
-            st.plotly_chart(fig_pmc, use_container_width=True)
+            st.plotly_chart(fig_pmc, width="stretch")
 
             if   tsb_at > 20:   st.info("😴 TSB alto — atleta descansado. Boa janela para treino de qualidade ou competição.")
             elif tsb_at >= 5:   st.success("✅ TSB na janela ideal (+5 a +20). Forma em dia.")
@@ -1391,7 +1394,7 @@ with tab_coach:
             yaxis_title="% do tempo",
             legend=dict(orientation="h", y=-0.15),
         )
-        st.plotly_chart(fig_pol, use_container_width=True)
+        st.plotly_chart(fig_pol, width="stretch")
         st.caption(
             "📖 Linha tracejada = modelo polarizado ideal (Seiler). "
             "Barras acima da linha = excesso nessa zona. O maior problema típico é excesso em Z3 e déficit em Z1."
@@ -1453,7 +1456,7 @@ with tab_coach:
                     xaxis_tickangle=-45,
                     showlegend=False,
                 )
-                st.plotly_chart(fig_ae, use_container_width=True)
+                st.plotly_chart(fig_ae, width="stretch")
 
                 if delta_ae >= 15:
                     st.success(
@@ -1595,7 +1598,7 @@ with tab_mapa:
                                          f"· {fmt_pace(row.get('pace_sec_km',0))}/km "
                                          f"· {hr_v} bpm"),
                             ).add_to(m)
-                    st_folium(m, use_container_width=True, height=480)
+                    st_folium(m, width="stretch", height=480)
                     st.caption("Passe o mouse sobre cada ponto para ver os detalhes.")
 
             else:
@@ -1690,7 +1693,7 @@ with tab_hist:
             "<extra></extra>"))
         set_pace_yaxis(fig, df_sc["pace_sec_km"])
         fig.update_layout(xaxis_title="")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
         st.markdown("---")
 
@@ -1717,7 +1720,7 @@ with tab_hist:
         df_tab["calories"]          = df_tab["calories"].apply(
             lambda x: f"{int(x)}" if not pd.isna(x) else "—")
         df_tab = df_tab.rename(columns=cols)
-        st.dataframe(df_tab, hide_index=True, use_container_width=True)
+        st.dataframe(df_tab, hide_index=True, width="stretch")
 
         st.markdown("---")
         st.subheader("🔎 Detalhes por Lap")
@@ -1791,7 +1794,7 @@ with tab_hist:
                         if n_ignorados > 0:
                             titulo += f" ({n_ignorados} micro-laps ocultados)"
                         fig.update_layout(title=titulo, xaxis_title="Lap")
-                        st.plotly_chart(fig, use_container_width=True)
+                        st.plotly_chart(fig, width="stretch")
 
                 with col_b:
                     laps_fc = laps_ativ[laps_ativ["average_heartrate"].notna()].copy()
@@ -1818,7 +1821,7 @@ with tab_hist:
                             )
                         fig.update_layout(title="❤️ FC por Lap",
                                           xaxis_title="Lap", yaxis_title="bpm")
-                        st.plotly_chart(fig, use_container_width=True)
+                        st.plotly_chart(fig, width="stretch")
                     else:
                         st.info("FC não disponível para esta atividade.")
 
@@ -1847,4 +1850,4 @@ with tab_hist:
                 df_laps_tab["average_cadence"] = df_laps_tab["average_cadence"].apply(
                     lambda x: f"{x*2:.0f} spm" if not pd.isna(x) else "—")
                 df_laps_tab = df_laps_tab.rename(columns=cols_lap)
-                st.dataframe(df_laps_tab, hide_index=True, use_container_width=True)
+                st.dataframe(df_laps_tab, hide_index=True, width="stretch")
