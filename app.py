@@ -22,15 +22,31 @@ except ImportError:
     HAS_FOLIUM = False
 
 st.set_page_config(page_title="PerformanceRun 🏃", page_icon="🏃",
-                   layout="wide", initial_sidebar_state="expanded")
+                   layout="wide", initial_sidebar_state="collapsed")
+
+# ── Responsividade mobile ───────────────────────────────────────────────────
+st.markdown("""<style>
+/* Mobile: reduz padding e permite scroll horizontal em gráficos */
+@media (max-width: 768px) {
+    .block-container { padding: .5rem .5rem 2rem !important; }
+    [data-testid="column"] { min-width: 0 !important; }
+    .stPlotlyChart > div { overflow-x: auto !important; }
+    h1 { font-size: 1.4rem !important; }
+    h2 { font-size: 1.2rem !important; }
+}
+/* Sidebar compacta em qualquer tela */
+section[data-testid="stSidebar"] [data-testid="stSidebarContent"] {
+    padding-top: 1rem;
+}
+</style>""", unsafe_allow_html=True)
 
 INTENSITY_COLORS = {
-    "Leve":           "#2ECC71",
-    "Moderado":       "#3498DB",
-    "Moderado Firme": "#F39C12",
-    "Forte":          "#E67E22",
-    "Muito Forte":    "#E74C3C",
-    "Skate":          "#95A5A6",
+    "Leve":           "#27AE60",  # verde
+    "Moderado":       "#F1C40F",  # amarelo
+    "Moderado Firme": "#E67E22",  # laranja
+    "Forte":          "#E74C3C",  # vermelho
+    "Muito Forte":    "#922B21",  # vermelho escuro
+    "Skate":          "#95A5A6",  # cinza
 }
 INTENSITY_ORDER = ["Leve","Moderado","Moderado Firme","Forte","Muito Forte","Skate"]
 
@@ -247,6 +263,46 @@ def pace_to_rgba(pace_sec, min_pace=220, max_pace=420, alpha=220):
     """Gradiente verde (rápido) → vermelho (lento) para heatmap."""
     t = min(1, max(0, (pace_sec - min_pace) / (max_pace - min_pace)))
     return [round(46 + t*185), round(204 - t*128), round(113 - t*53), alpha]
+
+def compute_main_laps_pace(laps_group):
+    """Pace da fase principal (remove aquec/desaquec — laps >15% mais lentos que mediana)."""
+    if laps_group.empty:
+        return None
+    laps = laps_group.sort_values("lap_index").copy()
+    laps = laps[laps["pace_sec_km"].notna() & (laps["pace_sec_km"] > 0) & (laps["pace_sec_km"] < 500)]
+    if len(laps) == 0:
+        return None
+    if len(laps) <= 2:
+        return float(laps["pace_sec_km"].mean())
+    mediana  = float(laps["pace_sec_km"].median())
+    threshold = mediana * 1.15
+    if len(laps) > 3 and float(laps.iloc[0]["pace_sec_km"]) > threshold:
+        laps = laps.iloc[1:]
+    if len(laps) > 2 and float(laps.iloc[-1]["pace_sec_km"]) > threshold:
+        laps = laps.iloc[:-1]
+    if laps.empty:
+        return None
+    total_dist = float(laps["distance_km"].sum())
+    if total_dist <= 0:
+        return float(laps["pace_sec_km"].mean())
+    return float((laps["pace_sec_km"] * laps["distance_km"]).sum() / total_dist)
+
+def fc_to_hex(fc_bpm):
+    """FC em bpm → cor por zona cardíaca (azul Z1 → vermelho Z5)."""
+    if pd.isna(fc_bpm) or float(fc_bpm) <= 0: return "#3498DB"
+    fc = float(fc_bpm)
+    if fc < 137: return "#3498DB"
+    if fc < 165: return "#2ECC71"
+    if fc < 175: return "#F39C12"
+    if fc < 185: return "#E67E22"
+    return "#E74C3C"
+
+def elev_gain_to_hex(elev_m_per_km):
+    """Elevação m/km → cor: verde (plano) → vermelho (morro, >45m/km)."""
+    if pd.isna(elev_m_per_km) or float(elev_m_per_km) < 0: return "#2ECC71"
+    t = min(1.0, max(0.0, float(elev_m_per_km) / 45.0))
+    return "#{:02X}{:02X}{:02X}".format(
+        round(46 + t*185), round(204 - t*128), round(113 - t*53))
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  DADOS
@@ -547,8 +603,20 @@ with tab_perf:
 
     with col_a:
         if "Intensidade" in df_run.columns:
-            df_b = cat_intensity(df_run[df_run["pace_sec_km"].notna()].copy())
-            df_agg = (df_b.groupby("Intensidade", observed=True)["pace_sec_km"]
+            # Usa pace do bloco principal (exclui aquec/desaquec por atividade)
+            if not lps_run.empty:
+                _mp = (lps_run.groupby("activity_id")
+                       .apply(compute_main_laps_pace).dropna().reset_index())
+                _mp.columns = ["id", "pace_main"]
+                df_run_p = df_run.merge(_mp, on="id", how="left")
+                df_run_p["pace_plot"] = df_run_p["pace_main"].fillna(df_run_p["pace_sec_km"])
+                _src = "bloco principal (aquec/desaquec excluídos)"
+            else:
+                df_run_p = df_run.copy()
+                df_run_p["pace_plot"] = df_run_p["pace_sec_km"]
+                _src = "corrida completa"
+            df_b = cat_intensity(df_run_p[df_run_p["pace_plot"].notna()].copy())
+            df_agg = (df_b.groupby("Intensidade", observed=True)["pace_plot"]
                          .agg(Media="mean", DP="std").reset_index().dropna())
             df_agg["Media_min"] = df_agg["Media"] / 60
             df_agg["DP_min"]    = df_agg["DP"] / 60
@@ -565,7 +633,9 @@ with tab_perf:
             set_pace_yaxis(fig, df_agg["Media"])
             fig.update_layout(title="🎯 Pace Médio por Intensidade", showlegend=False)
             st.plotly_chart(fig, width="stretch")
-            st.caption("Barra = pace médio. Traço vertical = desvio padrão.")
+            st.caption(
+                f"Pace do **{_src}**. Laps de aquecimento/desaquecimento "
+                "(>15% mais lentos que a mediana da sessão) são excluídos.")
 
     with col_b:
         df_s = df_run[df_run["pace_sec_km"].notna() & df_run["distance_km"].notna()].copy()
@@ -1577,148 +1647,208 @@ with tab_mapa:
                 "coords":   coords,
             })
 
-        # ── SECAO 1: Mapa Folium ─────────────────────────────────────────────
-        st.subheader("\U0001f5fa️ Mapa — rotas animadas")
-
-        mode_map = st.radio("Colorir por", ["Intensidade","Heatmap de pace (por segmento)"],
-                            horizontal=True)
-        tile_map = st.radio("Mapa base", ["Claro","Escuro","Topografico"], horizontal=True)
+        # ── SECAO 1: Mapa Folium (fragment isola do re-render externo) ───────────
+        st.subheader("🗺️ Mapa — rotas animadas")
 
         if not HAS_FOLIUM:
             st.error("Instale: `pip install streamlit-folium folium`")
         else:
-            tile_urls = {
-                "Claro":       "CartoDB positron",
-                "Escuro":      "CartoDB dark_matter",
-                "Topografico": "OpenTopoMap",
-            }
+            _routes_snap = routes
+            _lps_snap    = lps_run
+            _poly_snap   = poly_col
+            _lat2, _lng2 = lat_c, lng_c
 
-            m = folium.Map(location=[lat_c, lng_c], zoom_start=13, tiles=None)
-            folium.TileLayer(tile_urls[tile_map], name=tile_map).add_to(m)
-
-            # MiniMap + AntPath opcionais (folium.plugins)
             try:
-                from folium.plugins import AntPath, MiniMap
-                MiniMap(toggle_display=True, position="bottomleft",
-                        tile_layer="CartoDB positron", zoom_level_offset=-5).add_to(m)
-                _use_ant = True
-            except Exception:
-                _use_ant = False
+                _frag = st.fragment
+            except AttributeError:
+                def _frag(f): return f
 
-            def _popup_html(r):
-                return (
-                    f"<div style='font-family:sans-serif;min-width:190px;padding:2px'>"
-                    f"<div style='font-weight:600;font-size:13px;margin-bottom:3px'>{r['name'][:30]}</div>"
-                    f"<div style='color:#888;font-size:11px;margin-bottom:8px'>{r['date']}</div>"
-                    f"<table style='font-size:12px;border-collapse:collapse;width:100%'>"
-                    f"<tr><td style='color:#888;padding:2px 10px 2px 0'>Distancia</td><td style='font-weight:500'>{r['km']} km</td></tr>"
-                    f"<tr><td style='color:#888;padding:2px 10px 2px 0'>Pace</td><td style='font-weight:500'>{r['pace']}/km</td></tr>"
-                    f"<tr><td style='color:#888;padding:2px 10px 2px 0'>FC media</td><td style='font-weight:500'>{r['hr'] or '—'} bpm</td></tr>"
-                    f"</table>"
-                    f"<div style='margin-top:8px;padding:3px 8px;border-radius:4px;"
-                    f"background:{r['color_hex']}20;border-left:3px solid {r['color_hex']};"
-                    f"font-size:11px;color:#444'>{r['intensity']}</div>"
-                    f"</div>"
-                )
+            @_frag
+            def _render_folium():
+                _MODES = [
+                    "Intensidade",
+                    "Pace (rapido/lento)",
+                    "FC por zona",
+                    "Elevacao por segmento",
+                ]
+                mode_map = st.radio("Colorir rotas por", _MODES, horizontal=True)
+                tile_map = st.radio("Mapa base", ["Claro","Escuro","Topografico"],
+                                    horizontal=True)
+                tile_urls = {
+                    "Claro":       "CartoDB positron",
+                    "Escuro":      "CartoDB dark_matter",
+                    "Topografico": "OpenTopoMap",
+                }
+                m = folium.Map(location=[_lat2, _lng2], zoom_start=13, tiles=None)
+                folium.TileLayer(tile_urls[tile_map], name=tile_map).add_to(m)
 
-            for r in routes:
-                fg = folium.FeatureGroup(
-                    name=f"{r['date']} — {r['name'][:22]} ({r['km']}km)", show=True)
-                popup = folium.Popup(_popup_html(r), max_width=220)
+                try:
+                    from folium.plugins import AntPath, MiniMap
+                    MiniMap(toggle_display=True, position="bottomleft",
+                            tile_layer="CartoDB positron",
+                            zoom_level_offset=-5).add_to(m)
+                    _ant = True
+                except Exception:
+                    _ant = False
 
-                if poly_col and r["coords"]:
-                    if mode_map == "Intensidade":
-                        if _use_ant:
-                            AntPath(r["coords"], color=r["color_hex"], weight=4.5,
-                                    dash_array=[12,20], delay=800, opacity=0.92,
-                                    popup=popup).add_to(fg)
-                        else:
-                            folium.PolyLine(r["coords"], color=r["color_hex"],
-                                           weight=4.5, opacity=0.9,
-                                           popup=popup).add_to(fg)
-                        folium.CircleMarker(
-                            r["coords"][0], radius=7, color=r["color_hex"],
-                            fill=True, fill_opacity=1, weight=2,
-                            tooltip="Inicio").add_to(fg)
-                    else:
-                        # Heatmap de pace: divide polyline em segmentos pelos laps
-                        act_laps = lps_run[lps_run["activity_id"] == r["id"]].sort_values("lap_index") \
-                                   if not lps_run.empty else pd.DataFrame()
-                        coords_all = r["coords"]
-                        n_pts = len(coords_all) - 1
-                        if not act_laps.empty and n_pts > 0:
-                            total_km_lap = act_laps["distance_km"].sum()
-                            cum = 0.0
-                            for _, lap in act_laps.iterrows():
-                                lap_frac = lap["distance_km"] / total_km_lap if total_km_lap > 0 else 1/len(act_laps)
-                                i0 = int(cum * n_pts)
-                                i1 = min(n_pts, int((cum + lap_frac) * n_pts) + 1)
-                                seg = coords_all[i0:i1+1]
-                                if len(seg) >= 2:
-                                    col_seg = pace_to_hex(lap.get("pace_sec_km", r["pace_sec"]))
-                                    if _use_ant:
-                                        AntPath(seg, color=col_seg, weight=5,
-                                                dash_array=[12,20], delay=800,
-                                                opacity=0.9).add_to(fg)
-                                    else:
-                                        folium.PolyLine(seg, color=col_seg,
-                                                       weight=5, opacity=0.9).add_to(fg)
-                                cum += lap_frac
-                        else:
-                            col_seg = pace_to_hex(r["pace_sec"])
-                            if _use_ant:
-                                AntPath(coords_all, color=col_seg, weight=5,
-                                        dash_array=[12,20], delay=800, opacity=0.9).add_to(fg)
+                def _seg_color(lap, r, mode):
+                    if mode == "Pace (rapido/lento)":
+                        return pace_to_hex(lap.get("pace_sec_km", r["pace_sec"]))
+                    if mode == "FC por zona":
+                        return fc_to_hex(lap.get("average_heartrate", r["hr"]))
+                    if mode == "Elevacao por segmento":
+                        d = float(lap.get("distance_km") or 1)
+                        e = float(lap.get("total_elevation_gain") or 0)
+                        return elev_gain_to_hex(e / d if d > 0 else 0)
+                    return r["color_hex"]
+
+                def _popup(r):
+                    n = r["name"][:30]
+                    dt = r["date"]
+                    km = r["km"]
+                    pc = r["pace"]
+                    hr = r["hr"] or "—"
+                    ci = r["color_hex"]
+                    it = r["intensity"]
+                    return (
+                        "<div style='font-family:sans-serif;min-width:190px;padding:2px'>"
+                        "<b style='font-size:13px'>" + n + "</b><br>"
+                        "<span style='color:#888;font-size:11px'>" + dt + "</span>"
+                        "<table style='font-size:12px;width:100%;margin-top:6px'>"
+                        "<tr><td style='color:#888;padding:2px 10px 2px 0'>Dist</td>"
+                        "<td><b>" + str(km) + " km</b></td></tr>"
+                        "<tr><td style='color:#888;padding:2px 10px 2px 0'>Pace</td>"
+                        "<td><b>" + pc + "/km</b></td></tr>"
+                        "<tr><td style='color:#888;padding:2px 10px 2px 0'>FC</td>"
+                        "<td><b>" + str(hr) + " bpm</b></td></tr>"
+                        "</table>"
+                        "<div style='margin-top:7px;padding:3px 8px;border-radius:4px;"
+                        "background:" + ci + "20;border-left:3px solid " + ci + ";"
+                        "font-size:11px;color:#444'>" + it + "</div></div>"
+                    )
+
+                for r in _routes_snap:
+                    _fg_name = r["date"] + " — " + r["name"][:20] + " (" + str(r["km"]) + "km)"
+                    fg = folium.FeatureGroup(name=_fg_name, show=True)
+                    pop = folium.Popup(_popup(r), max_width=220)
+
+                    if _poly_snap and r["coords"]:
+                        act_laps = (
+                            _lps_snap[_lps_snap["activity_id"] == r["id"]]
+                            .sort_values("lap_index")
+                            if not _lps_snap.empty else pd.DataFrame())
+
+                        if mode_map == "Intensidade":
+                            if _ant:
+                                AntPath(r["coords"], color=r["color_hex"], weight=4.5,
+                                        dash_array=[12, 20], delay=800, opacity=0.92,
+                                        popup=pop).add_to(fg)
                             else:
-                                folium.PolyLine(coords_all, color=col_seg,
-                                               weight=5, opacity=0.9).add_to(fg)
+                                folium.PolyLine(r["coords"], color=r["color_hex"],
+                                               weight=4.5, opacity=0.9,
+                                               popup=pop).add_to(fg)
+                        else:
+                            coords_all = r["coords"]
+                            n_pts = len(coords_all) - 1
+                            if not act_laps.empty and n_pts > 0:
+                                total_km = act_laps["distance_km"].sum()
+                                cum = 0.0
+                                for _, lap in act_laps.iterrows():
+                                    frac = (float(lap["distance_km"]) / total_km
+                                            if total_km > 0 else 1 / len(act_laps))
+                                    i0 = int(cum * n_pts)
+                                    i1 = min(n_pts, int((cum + frac) * n_pts) + 1)
+                                    seg = coords_all[i0:i1 + 1]
+                                    if len(seg) >= 2:
+                                        cseg = _seg_color(lap, r, mode_map)
+                                        if _ant:
+                                            AntPath(seg, color=cseg, weight=5,
+                                                    dash_array=[12, 20], delay=800,
+                                                    opacity=0.9).add_to(fg)
+                                        else:
+                                            folium.PolyLine(seg, color=cseg,
+                                                           weight=5, opacity=0.9).add_to(fg)
+                                    cum += frac
+                            else:
+                                cseg = _seg_color({}, r, mode_map)
+                                if _ant:
+                                    AntPath(coords_all, color=cseg, weight=5,
+                                            dash_array=[12, 20], delay=800,
+                                            opacity=0.9).add_to(fg)
+                                else:
+                                    folium.PolyLine(coords_all, color=cseg,
+                                                   weight=5, opacity=0.9).add_to(fg)
+
                         folium.CircleMarker(
-                            r["coords"][0], radius=6,
-                            color=pace_to_hex(r["pace_sec"]),
-                            fill=True, fill_opacity=1).add_to(fg)
-                else:
-                    # Apenas ponto de inicio
-                    folium.CircleMarker(
-                        [r["lat"], r["lng"]],
-                        radius=max(5, min(18, r["km"] * 0.9)),
-                        color=r["color_hex"] if mode_map == "Intensidade" else pace_to_hex(r["pace_sec"]),
-                        fill=True, fill_opacity=0.8,
-                        popup=popup).add_to(fg)
+                            r["coords"][0], radius=6, color=r["color_hex"],
+                            fill=True, fill_opacity=1, weight=2,
+                            tooltip="Início").add_to(fg)
+                    else:
+                        folium.CircleMarker(
+                            [r["lat"], r["lng"]],
+                            radius=max(5, min(16, r["km"] * 0.9)),
+                            color=r["color_hex"], fill=True, fill_opacity=0.8,
+                            popup=pop).add_to(fg)
 
-                fg.add_to(m)
+                    fg.add_to(m)
 
-            folium.LayerControl(collapsed=False).add_to(m)
+                folium.LayerControl(collapsed=True, position="topright").add_to(m)
 
-            # Legenda HTML
-            if mode_map == "Intensidade":
-                leg_items = "".join(
-                    f"<div style='display:flex;align-items:center;gap:6px;margin:3px 0'>"
-                    f"<div style='width:18px;height:4px;background:{c};border-radius:2px'></div>"
-                    f"<span>{k}</span></div>"
-                    for k,c in INTENSITY_COLORS.items() if k != "Skate"
+                # Legenda transparente — construida sem backslash em f-string
+                _li_int = "".join(
+                    "<div style='display:flex;align-items:center;gap:6px;margin:3px 0;"
+                    "color:rgba(255,255,255,.85)'>"
+                    "<div style='width:16px;height:4px;background:" + c + ";"
+                    "border-radius:2px;flex-shrink:0'></div>" + k + "</div>"
+                    for k, c in INTENSITY_COLORS.items() if k != "Skate"
                 )
-                leg_title = "Intensidade"
-            else:
-                leg_items = ("<div style='display:flex;align-items:center;gap:6px'>"
-                             "<span style='color:rgba(255,255,255,0.8)'>lento</span>"
-                             "<div style='width:50px;height:5px;border-radius:3px;"
-                             "background:linear-gradient(to right,rgb(231,76,60),rgb(46,204,113))'></div>"
-                             "<span style='color:rgba(255,255,255,0.8)'>rapido</span></div>")
-                leg_title = "Pace"
+                _li_pace = (
+                    "<div style='display:flex;align-items:center;gap:5px;"
+                    "color:rgba(255,255,255,.8)'><span>lento</span>"
+                    "<div style='width:50px;height:5px;border-radius:3px;"
+                    "background:linear-gradient(to right,rgb(231,76,60),rgb(46,204,113))'>"
+                    "</div><span>rápido</span></div>"
+                )
+                _li_fc = "".join(
+                    "<div style='display:flex;align-items:center;gap:6px;margin:3px 0;"
+                    "color:rgba(255,255,255,.85)'>"
+                    "<div style='width:16px;height:4px;background:" + c + ";"
+                    "border-radius:2px'></div>" + z + "</div>"
+                    for z, c in [("Z1 <137bpm","#3498DB"),("Z2 <165","#2ECC71"),
+                                  ("Z3 <175","#F39C12"),("Z4 <185","#E67E22"),
+                                  ("Z5 ≥185","#E74C3C")]
+                )
+                _li_elev = (
+                    "<div style='display:flex;align-items:center;gap:5px;"
+                    "color:rgba(255,255,255,.8)'><span>plano</span>"
+                    "<div style='width:50px;height:5px;border-radius:3px;"
+                    "background:linear-gradient(to right,rgb(46,204,113),rgb(231,76,60))'>"
+                    "</div><span>morro</span></div>"
+                )
+                _LEG = {
+                    "Intensidade":           ("Intensidade",          _li_int),
+                    "Pace (rapido/lento)":   ("Pace",                 _li_pace),
+                    "FC por zona":           ("FC",                   _li_fc),
+                    "Elevacao por segmento": ("Elevação",       _li_elev),
+                }
+                leg_title, leg_items = _LEG.get(mode_map, ("", ""))
+                legend_html = (
+                    "<div style='position:absolute;bottom:36px;left:8px;z-index:9999;"
+                    "background:rgba(10,10,10,0.72);padding:9px 13px;border-radius:10px;"
+                    "font-size:12px;color:rgba(255,255,255,.9)'>"
+                    "<div style='font-weight:600;margin-bottom:5px'>" + leg_title + "</div>"
+                    + leg_items + "</div>"
+                )
+                m.get_root().html.add_child(folium.Element(legend_html))
 
-            legend_html = (
-                f"<div style='position:absolute;bottom:36px;right:8px;z-index:9999;"
-                f"background:rgba(10,10,10,0.68);padding:10px 14px;border-radius:10px;"
-                f"font-size:12px;max-width:158px'>"
-                f"{leg_title}"
-                f"{leg_items}</div>"
-            )
-            m.get_root().html.add_child(folium.Element(legend_html))
+                st_folium(m, use_container_width=True, height=500, returned_objects=[])
+                _hint = "Clique numa rota para detalhes" if _poly_snap else "Tamanho = distância"
+                st.caption(
+                    _hint + " · Ative/desative rotas no controle (canto superior direito) · "
+                    + ("Animação AntPath ativa" if _ant else "pip install folium para animação")
+                )
 
-            st_folium(m, use_container_width=True, height=500, returned_objects=[])
-            hint = "Clique numa rota para detalhes" if poly_col else "Tamanho = distancia"
-            st.caption(f"{hint} · Use o controle superior direito para alternar rotas · "
-                       f"{'AntPath animado ativo' if _use_ant else 'Instale folium.plugins para animacao'}")
+            _render_folium()
 
         # ── SECAO 2: Comparativo de pace por lap ─────────────────────────────
         st.markdown("---")
