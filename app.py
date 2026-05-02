@@ -421,6 +421,7 @@ def filt_act(d):
         mask &= d[int_col].isin(sel_int) | d[int_col].isna()
     return d[mask].copy()
 
+
 def filt_laps(d):
     if d.empty: return d
     return d[(d["start_date"] >= s_dt) & (d["start_date"] <= e_dt)
