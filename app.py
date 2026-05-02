@@ -1600,7 +1600,6 @@ with tab_mapa:
         st.warning("Nenhuma atividade com dados de GPS no periodo selecionado.")
     else:
         def _make_label(row):
-            ...
             dt    = row["start_date"].strftime("%d/%m/%Y")
             nm    = str(row.get("name") or "")[:35]
             km    = round(float(row.get("distance_km") or 0), 1)
