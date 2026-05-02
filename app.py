@@ -1588,11 +1588,13 @@ with tab_mapa:
 
     # ── Preparacao dos dados ────────────────────────────────────────────────
     df_map = df_run.copy()
-    if has_ll:
-        df_map = df_map[df_map["latitude"].notna() & df_map["longitude"].notna()]
     if poly_col:
+        # Tem polylines — filtra só por polyline, não precisa lat/lng
         df_map = df_map[df_map[poly_col].notna() & (df_map[poly_col].astype(str).str.len() > 4)]
-    df_map = df_map.sort_values("start_date", ascending=False)
+    elif has_ll:
+        # Sem polylines — usa pontos de início (lat/lng)
+        df_map = df_map[df_map["latitude"].notna() & df_map["longitude"].notna()]
+
 
     st.write(f"poly_col='{poly_col}' | poly_count={(df_raw[poly_col].astype(str).str.len() > 4).sum() if poly_col else 0} | lat_count={df_run['latitude'].notna().sum() if 'latitude' in df_run.columns else 0}")
 
@@ -1627,8 +1629,15 @@ with tab_mapa:
         st.caption(f"**{len(df_map)}** atividade(s) · {len(_all_labels)} disponíveis no período")
 
 
-        lat_c = float(df_map["latitude"].mean()) if has_ll else -23.55
-        lng_c = float(df_map["longitude"].mean()) if has_ll else -46.63
+        if poly_col and not df_map.empty:
+            _fc = decode_polyline(df_map[poly_col].dropna().iloc[0])
+            lat_c = _fc[0][0] if _fc else -23.55
+            lng_c = _fc[0][1] if _fc else -46.63
+        elif has_ll and df_map["latitude"].notna().any():
+            lat_c = float(df_map["latitude"].dropna().mean())
+            lng_c = float(df_map["longitude"].dropna().mean())
+        else:
+            lat_c, lng_c = -23.55, -46.63
 
         def get_color_hex(row):
             int_val = str(row.get("Intensidade","Moderado") or "Moderado")
