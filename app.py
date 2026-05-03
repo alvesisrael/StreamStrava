@@ -2288,10 +2288,6 @@ with tab_mapa:
                     
                     # 5) Renderiza → só uma vez, no final
                     st.plotly_chart(fig_elv, use_container_width=True)
-                    if _usou_stream:
-                        st.caption("✅ Altitude real do GPS")
-                    else:
-                        st.caption("⚠️ Altitude estimada pelos laps (stream não disponível)")
 
                     # ── Tabela analítica por km ──────────────────────────────
                     laps_tbl = (
