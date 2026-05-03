@@ -1240,10 +1240,12 @@ with tab_metas:
 
     # ── Previsões de Prova — Fórmula de Riegel ───────────────────────────────
     st.markdown("---")
+    # ── Previsões de Prova — Fórmula de Riegel ───────────────────────────────
+    st.markdown("---")
     st.subheader("🔮 Previsões de Prova")
     st.caption(
         "Fórmula de Riegel: **T₂ = T₁ × (D₂/D₁)^1.06** — mesma base usada pelo Strava. "
-        "Quanto mais próxima a distância de referência da distância alvo, mais precisa a estimativa."
+        "Base escolhida automaticamente pelo melhor esforço disponível mais longo."
     )
 
     def _riegel(t1, d1, d2):
@@ -1268,100 +1270,88 @@ with tab_metas:
         km = dist_map.get(dist_label.lower())
         return best_pace * km if km else None
 
-    _bases = {
-        "1K":      (_best_sec("1k"),             1.0),
-        "5K":      (_best_sec("5k"),             5.0),
-        "10K":     (_best_sec("10k"),           10.0),
-        "Meia":    (_best_sec("half-marathon"), 21.097),
-        "Maratona":(_best_sec("marathon"),      42.195),
-    }
-    _alvos = [("5K", 5.0), ("10K", 10.0), ("Meia (21K)", 21.097), ("Maratona (42K)", 42.195)]
-    _base_opts = {k: v for k, v in _bases.items() if v[0] is not None}
+    _bases = [
+        ("Maratona", _best_sec("marathon"),      42.195),
+        ("Meia",     _best_sec("half-marathon"), 21.097),
+        ("10K",      _best_sec("10k"),           10.0),
+        ("5K",       _best_sec("5k"),             5.0),
+        ("1K",       _best_sec("1k"),             1.0),
+    ]
+    # Usa a base mais longa disponível
+    _base_auto = next(((n, t, d) for n, t, d in _bases if t), None)
 
-    if not _base_opts:
+    _alvos = [("5K", 5.0), ("10K", 10.0), ("Meia (21K)", 21.097), ("Maratona (42K)", 42.195)]
+    _CONF  = {
+        ("1K","5K"):"⚠️ Estimativa","1K10K":"⚠️ Estimativa",
+        ("5K","5K"):"✅ Alta precisão",("5K","10K"):"✅ Alta precisão",
+        ("5K","Meia (21K)"):"🟡 Boa estimativa",("5K","Maratona (42K)"):"⚠️ Estimativa",
+        ("10K","5K"):"✅ Alta precisão",("10K","10K"):"✅ Alta precisão",
+        ("10K","Meia (21K)"):"✅ Alta precisão",("10K","Maratona (42K)"):"🟡 Boa estimativa",
+        ("Meia","5K"):"🟡 Boa estimativa",("Meia","10K"):"✅ Alta precisão",
+        ("Meia","Meia (21K)"):"✅ Alta precisão",("Meia","Maratona (42K)"):"✅ Alta precisão",
+        ("Maratona","5K"):"🟡 Boa estimativa",("Maratona","10K"):"✅ Alta precisão",
+        ("Maratona","Meia (21K)"):"✅ Alta precisão",("Maratona","Maratona (42K)"):"✅ Alta precisão",
+    }
+
+    if not _base_auto:
         st.info("Nenhum best effort disponível. Rode com o Strava ativo para registrar "
                 "esforços em distâncias padrão (1K, 5K, 10K…).")
     else:
-        _CONF = {
-            ("1K",       "5K"):              "⚠️ Estimativa grossa",
-            ("1K",       "10K"):             "⚠️ Estimativa grossa",
-            ("1K",       "Meia (21K)"):      "⚠️ Baixa precisão",
-            ("1K",       "Maratona (42K)"): "⚠️ Baixa precisão",
-            ("5K",       "5K"):              "✅ Alta precisão",
-            ("5K",       "10K"):             "✅ Alta precisão",
-            ("5K",       "Meia (21K)"):      "🟡 Boa estimativa",
-            ("5K",       "Maratona (42K)"): "⚠️ Estimativa",
-            ("10K",      "5K"):              "✅ Alta precisão",
-            ("10K",      "10K"):             "✅ Alta precisão",
-            ("10K",      "Meia (21K)"):      "✅ Alta precisão",
-            ("10K",      "Maratona (42K)"): "🟡 Boa estimativa",
-            ("Meia",     "5K"):              "🟡 Boa estimativa",
-            ("Meia",     "10K"):             "✅ Alta precisão",
-            ("Meia",     "Meia (21K)"):      "✅ Alta precisão",
-            ("Meia",     "Maratona (42K)"): "✅ Alta precisão",
-            ("Maratona", "5K"):              "🟡 Boa estimativa",
-            ("Maratona", "10K"):             "✅ Alta precisão",
-            ("Maratona", "Meia (21K)"):      "✅ Alta precisão",
-            ("Maratona", "Maratona (42K)"): "✅ Alta precisão",
-        }
+        _bn, _t1, _d1 = _base_auto
+        st.caption(f"Base de referência usada: **{_bn}** ({_fmt_time(_t1)} · {fmt_pace(_t1/_d1)}/km)")
 
-        _base_sel = st.selectbox(
-            "Distância de referência",
-            list(_base_opts.keys()),
-            index=min(1, len(_base_opts) - 1),
-            help="Usa seu melhor tempo nessa distância para prever as demais.",
-            key="riegel_base"
-        )
-        _t1, _d1 = _base_opts[_base_sel]
-
+        # 4 cards de previsão
         _cols = st.columns(4)
         for _i, (_label, _d2) in enumerate(_alvos):
-            _t2   = _riegel(_t1, _d1, _d2)
-            _conf = _CONF.get((_base_sel, _label), "🟡 Estimativa")
+            _t2        = _riegel(_t1, _d1, _d2)
+            _conf      = _CONF.get((_bn, _label), "🟡 Estimativa")
             _pace_pred = (_t2 / _d2) if _t2 else None
             with _cols[_i]:
-                st.metric(
-                    f"🏁 {_label}",
-                    _fmt_time(_t2),
-                    f"{fmt_pace(_pace_pred)}/km" if _pace_pred else "",
-                )
+                st.metric(f"🏁 {_label}", _fmt_time(_t2),
+                          f"{fmt_pace(_pace_pred)}/km" if _pace_pred else "")
                 st.caption(_conf)
 
+        # Gráfico comparativo: todas as bases × todas as distâncias alvo
         st.markdown("##### Comparativo entre bases de referência")
-        _alvo_sel = st.selectbox(
-            "Ver previsões para",
-            [a[0] for a in _alvos],
-            key="riegel_alvo"
-        )
-        _d2_sel = dict(_alvos)[_alvo_sel]
+        _bases_disp = [(n, t, d) for n, t, d in _bases if t]
 
-        _comp_rows = []
-        for _bn, (_bt, _bd) in _base_opts.items():
-            _t2c = _riegel(_bt, _bd, _d2_sel)
-            if _t2c:
-                _comp_rows.append({
-                    "Base": _bn,
-                    "Tempo": _fmt_time(_t2c),
-                    "Pace":  fmt_pace(_t2c / _d2_sel) + "/km",
-                    "pace_min": (_t2c / _d2_sel) / 60,
-                    "pace_sec": _t2c / _d2_sel,
-                })
+        if len(_bases_disp) >= 2:
+            _traces_data = []
+            for _label, _d2 in _alvos:
+                _paces = []
+                _times = []
+                for _bname, _bt, _bd in _bases_disp:
+                    _t2c = _riegel(_bt, _bd, _d2)
+                    _paces.append((_t2c / _d2 / 60) if _t2c else None)
+                    _times.append(fmt_pace(_t2c / _d2) if _t2c else "—")
+                _traces_data.append((_label, _paces, _times))
 
-        if _comp_rows:
-            _comp_df = pd.DataFrame(_comp_rows).sort_values("pace_min")
+            _base_names = [b[0] for b in _bases_disp]
+            _DIST_COLORS = [BLUE, GREEN, AMBER, RED]
             fig_rie = go.Figure()
-            fig_rie.add_bar(
-                x=_comp_df["Base"],
-                y=_comp_df["pace_min"],
-                text=_comp_df["Pace"],
-                textposition="outside",
-                marker_color=PURPLE,
-            )
-            set_pace_yaxis(fig_rie, _comp_df["pace_sec"])
+            for _idx, (_lbl, _pcs, _tms) in enumerate(_traces_data):
+                fig_rie.add_bar(
+                    name=_lbl,
+                    x=_base_names,
+                    y=_pcs,
+                    text=_tms,
+                    textposition="outside",
+                    marker_color=_DIST_COLORS[_idx % len(_DIST_COLORS)],
+                )
+
+            _all_pace_sec = [
+                _riegel(_bt, _bd, _d2) / _d2
+                for _, _d2 in _alvos
+                for _, _bt, _bd in _bases_disp
+                if _riegel(_bt, _bd, _d2)
+            ]
+            set_pace_yaxis(fig_rie, pd.Series(_all_pace_sec))
             fig_rie.update_layout(
-                title=f"Pace previsto para {_alvo_sel} por distância de referência",
-                showlegend=False,
-                height=300,
+                barmode="group",
+                title="Pace previsto por distância alvo × base de referência",
+                xaxis_title="Base de referência",
+                legend=dict(orientation="h", y=-0.18),
+                height=340,
             )
             st.plotly_chart(fig_rie, use_container_width=True, key="fig_riegel_comp")
             st.caption(
