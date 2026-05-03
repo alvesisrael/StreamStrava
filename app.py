@@ -1239,7 +1239,7 @@ with tab_metas:
     st.plotly_chart(fig, use_container_width=True, key="fig_metas_mensais")
 
     # ── Previsões de Prova — Fórmula de Riegel ───────────────────────────────
-    st.markdown("---")
+    """st.markdown("---")
     st.subheader("🔮 Previsões de Prova")
     st.caption(
         "Fórmula de Riegel: **T₂ = T₁ × (D₂/D₁)^1.06** — mesma base usada pelo Strava. "
@@ -1294,8 +1294,8 @@ with tab_metas:
     }
 
     def _base_para_prever(d2_alvo):
-        """Retorna a maior base disponível que seja menor que d2_alvo.
-        Garante que estamos sempre PREVENDO para cima, nunca trivialmente."""
+        #"Retorna a maior base disponível que seja menor que d2_alvo.
+        #Garante que estamos sempre PREVENDO para cima, nunca trivialmente.
         menores = [(n, t, d) for n, t, d in _bases_disp if d < d2_alvo * 0.85]
         if menores:
             return max(menores, key=lambda x: x[2])  # maior das menores
@@ -1323,7 +1323,7 @@ with tab_metas:
                         f"{fmt_pace(_pace_p)}/km" if _pace_p else "",
                     )
                     st.caption(f"{_conf} · base {_bn} ({_fmt_time(_t1)})")
-
+"""
 # ══════════════════════════════════════════════════════════════════════════════
 #  8 · VOLUME E EVOLUÇÃO
 # ══════════════════════════════════════════════════════════════════════════════
