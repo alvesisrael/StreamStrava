@@ -375,12 +375,28 @@ st.sidebar.title("🎛️ Filtros")
 min_d = df_raw["start_date"].min().date()
 max_d = df_raw["start_date"].max().date()
 
+import datetime as _dt
 _col1, _col2 = st.sidebar.columns([3, 1])
 with _col1:
     st.markdown("**Período**")
 with _col2:
     if st.button("↺", help="Resetar para o período completo", key="reset_date"):
         st.session_state["date_range"] = (min_d, max_d)
+
+# Atalhos de período
+_quick_cols = st.sidebar.columns(3)
+_today = _dt.date.today()
+_quick = {
+    "7d":   (_today - _dt.timedelta(days=7),  _today),
+    "30d":  (_today - _dt.timedelta(days=30), _today),
+    "3m":   (_today - _dt.timedelta(days=90), _today),
+    "6m":   (_today - _dt.timedelta(days=180),_today),
+    "Ano":  (_dt.date(_today.year, 1, 1),      _today),
+    "Tudo": (min_d, max_d),
+}
+for _i, (_lbl, _rng) in enumerate(_quick.items()):
+    if _quick_cols[_i % 3].button(_lbl, key=f"qd_{_lbl}", use_container_width=True):
+        st.session_state["date_range"] = _rng
 
 date_range = st.sidebar.date_input(
     "Período", value=st.session_state.get("date_range", (min_d, max_d)),
@@ -420,7 +436,6 @@ def filt_act(d):
         # Só exclui quando a intensidade É conhecida e NÃO está selecionada
         mask &= d[int_col].isin(sel_int) | d[int_col].isna()
     return d[mask].copy()
-
 
 def filt_laps(d):
     if d.empty: return d
@@ -587,7 +602,7 @@ with tab_perf:
     c1.metric("🥇 Melhor 3km",   melhor_3km())
     c2.metric("🥇 Melhor 5K",    melhor_be("5k"))
     c3.metric("🥇 Melhor 10K",   melhor_be("10k"))
-    c4.metric("🥇 Melhor HM",    melhor_be("half-marathon"))
+    c4.metric("🥇 Melhor HM",    melhor_be("half-marathon"), help="HM = Half Marathon · 21,1 km")
     c5.metric("🏅 PRs Totais",   f"{int(df_run['pr_count'].sum()):,}"
                                   if df_run["pr_count"].notna().any() else "—")
 
@@ -690,10 +705,10 @@ with tab_fc:
                                  if df_run["max_heartrate"].notna().any() else "—")
 
     if "weather_temp" in df_run.columns:
-        fc_calor = df_run[df_run["weather_temp"] > 24]["average_heartrate"].mean()
-        fc_frio  = df_run[df_run["weather_temp"] < 18]["average_heartrate"].mean()
-        c3.metric("🌡️ FC no Calor (>24°C)", f"{fc_calor:.0f} bpm" if not pd.isna(fc_calor) else "—")
-        c4.metric("❄️ FC no Frio (<18°C)",  f"{fc_frio:.0f} bpm"  if not pd.isna(fc_frio)  else "—")
+        fc_calor = df_run[df_run["weather_temp"] >= 28]["average_heartrate"].mean()
+        fc_frio  = df_run[df_run["weather_temp"] <= 14]["average_heartrate"].mean()
+        c3.metric("🌡️ FC no Calor (≥28°C)", f"{fc_calor:.0f} bpm" if not pd.isna(fc_calor) else "—")
+        c4.metric("❄️ FC no Frio (≤14°C)",  f"{fc_frio:.0f} bpm"  if not pd.isna(fc_frio)  else "—")
 
     st.markdown("---")
 
@@ -889,30 +904,43 @@ with tab_intel:
             recent_ids = (lps_run.sort_values("start_date", ascending=False)
                           ["activity_id"].unique()[:10])
             df_box = lps_run[lps_run["activity_id"].isin(recent_ids)].copy()
-            df_box["Data"] = df_box["start_date"].dt.strftime("%d/%m")
-            df_agg2 = (df_box.groupby("Data")["pace_sec_km"]
-                             .agg(Media="mean", DP="std").reset_index().dropna())
+            # Filtra paces de caminhada/outliers antes de agregar
+            df_box = df_box[df_box["pace_sec_km"].notna() &
+                            (df_box["pace_sec_km"] > 0) &
+                            (df_box["pace_sec_km"] <= 500)]
+            # Agrupa por atividade (não por data — evita sobreposição)
+            act_info = lps_run.drop_duplicates("activity_id")[["activity_id","start_date"]].copy()
+            act_info["Label"] = act_info["start_date"].dt.strftime("%d/%m")
+            df_box = df_box.merge(act_info[["activity_id","Label"]], on="activity_id", how="left")
+            df_agg2 = (df_box.groupby(["activity_id","Label"])["pace_sec_km"]
+                             .agg(Media="mean", DP="std").reset_index().dropna()
+                             .sort_values("activity_id").tail(10))
             df_agg2["Media_min"] = df_agg2["Media"] / 60
             df_agg2["DP_min"]    = df_agg2["DP"] / 60
-            df_agg2["Label"]     = df_agg2["Media"].apply(fmt_pace)
+            df_agg2["PaceLabel"] = df_agg2["Media"].apply(fmt_pace)
             fig = go.Figure(go.Bar(
-                x=df_agg2["Data"], y=df_agg2["Media_min"],
+                x=df_agg2["Label"], y=df_agg2["Media_min"],
                 error_y=dict(type="data", array=df_agg2["DP_min"].tolist(), visible=True),
-                marker_color=BLUE, text=df_agg2["Label"], textposition="outside",
+                marker_color=BLUE, text=df_agg2["PaceLabel"], textposition="outside",
             ))
             set_pace_yaxis(fig, df_agg2["Media"])
-            fig.update_layout(title="📅 Pace Médio — 10 Treinos Mais Recentes")
+            fig.update_layout(title="📅 Pace Médio — 10 Treinos Mais Recentes",
+                              xaxis=dict(tickangle=-30))
             st.plotly_chart(fig, width="stretch")
+            st.caption("Uma barra por treino. Traço = variação interna (desvio padrão).")
 
         with col_b:
-            df_hist = lps_run[lps_run["pace_sec_km"].notna()].copy()
+            df_hist = lps_run[lps_run["pace_sec_km"].notna() &
+                              (lps_run["pace_sec_km"] > 0) &
+                              (lps_run["pace_sec_km"] <= 480)].copy()  # exclui caminhadas >8:00/km
             df_hist["Pace_min"] = df_hist["pace_sec_km"] / 60
-            fig = px.histogram(df_hist, x="Pace_min", nbins=40,
-                               title="📊 Distribuição de Pace — Todos os Laps",
+            fig = px.histogram(df_hist, x="Pace_min", nbins=35,
+                               title="📊 Distribuição de Pace — Todos os Laps (até 8:00/km)",
                                color_discrete_sequence=[PURPLE],
                                labels={"Pace_min":"Pace (min/km)"})
             fig.update_yaxes(title="Nº de Laps")
             st.plotly_chart(fig, width="stretch")
+            st.caption("Laps > 8:00/km (caminhadas e recuperações muito lentas) excluídos.")
 
         lps_cv = lps_run.merge(cv_df, on="activity_id")
         df_cv_m = (lps_cv.groupby(["MesAnoOrd","MesAno"])
@@ -947,7 +975,7 @@ with tab_elev:
         c1.metric("⛰️ Elevação Total",       f"{df_e['elevation_gain'].sum():,.0f} m")
         c2.metric("📈 Maior Subida",          f"{df_e['elevation_gain'].max():.0f} m")
         c3.metric("📏 Elevação Média/Run",    f"{df_e['elevation_gain'].mean():.0f} m")
-        c4.metric("📐 Gradiente Médio",       f"{df_e['elev_km'].mean():.1f} m/km")
+        c4.metric("📐 Gradiente Médio",       f"{df_e['elev_km'].mean():.1f} m/km", help="Metros de subida por km percorrido. 10 m/km ≈ 1% de inclinação média.")
         runs_montanha = len(df_e[df_e["elevation_gain"] >= 300])
         c5.metric("🏔️ Runs c/ >300m",        f"{runs_montanha}")
 
@@ -1100,13 +1128,13 @@ with tab_clima:
                              labels={"weather_temp":"Temperatura (°C)",
                                      "Pace_min":"Pace (min/km)"})
             fig.update_yaxes(autorange="reversed")
-            fig.add_vrect(x0=18, x1=24, fillcolor=GREEN, opacity=0.07,
-                          annotation_text="Zona Ideal")
+            fig.add_vrect(x0=15, x1=26, fillcolor=GREEN, opacity=0.07,
+                          annotation_text="Confortável")
             st.plotly_chart(fig, width="stretch")
 
         with col_b:
-            bins   = [0,15,18,22,26,50]
-            labels = ["<15°C","15–18°C","18–22°C","22–26°C",">26°C"]
+            bins   = [0,14,18,24,28,50]
+            labels = ["≤14°C (frio)","15–18°C","18–24°C","24–28°C","≥28°C (calor)"]
             df_w["Faixa"] = pd.cut(df_w["weather_temp"], bins=bins, labels=labels)
             df_f = (df_w.groupby("Faixa", observed=True)
                         .agg(Pace=("pace_sec_km","mean"), Qtd=("id","count"))
@@ -1271,6 +1299,8 @@ with tab_vol:
     fig.update_layout(title="📊 Crescimento de Volume MoM (%)",
                       yaxis_title="%", xaxis_tickangle=-45)
     st.plotly_chart(fig, width="stretch")
+    st.caption("**MoM = Month over Month** — variação de quilometragem em relação ao mês anterior. "
+               "Verde = crescimento moderado (saudável) · Vermelho = queda ou salto excessivo (>30% é risco de lesão).")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1280,7 +1310,9 @@ with tab_coach:
     st.title("🧑‍🏫 Visão Treinador")
 
     hoje  = pd.Timestamp.now()
-    ult7  = df_run[df_run["start_date"] >= hoje - timedelta(days=7)]
+    # Semana do calendário actual (segunda a domingo)
+    _inicio_semana = (hoje - timedelta(days=hoje.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+    ult7  = df_run[df_run["start_date"] >= _inicio_semana]
     ult28 = df_run[df_run["start_date"] >= hoje - timedelta(days=28)]
 
     carga_aguda   = ult7["suffer_score"].sum()  if "suffer_score" in df_run.columns else 0
@@ -1303,8 +1335,8 @@ with tab_coach:
     c1.metric("⚡ ACWR",               f"{acwr:.2f}", zona_r)
     c2.metric("🔥 Carga Aguda 7d",     f"{carga_aguda:.0f}")
     c3.metric("📊 Carga Crônica 28d",  f"{carga_cronica:.0f}")
-    c4.metric("🎯 Ratio Leve:Intenso", ratio_li, help="Ideal: ~80:20 (polarized)")
-    c5.metric("📏 KM última semana",   f"{ult7['distance_km'].sum():.0f} km")
+    c4.metric("🎯 Ratio Leve:Intenso", ratio_li, help="Proporção de treinos fáceis/moderados vs. fortes/muito fortes. Ideal: 4:1 (80% fácil, 20% intenso — modelo polarizado de Seiler).")
+    c5.metric("📏 KM esta semana",     f"{ult7['distance_km'].sum():.0f} km", help="Quilometragem de segunda-feira a hoje (semana actual do calendário).")
 
     st.caption("📖 **ACWR:** compara esforço dos últimos 7d com a média das 4 semanas. "
                "Entre 0,8 e 1,3 = equilíbrio seguro. Acima de 1,5 = risco elevado de lesão.")
@@ -1589,20 +1621,19 @@ with tab_mapa:
     # ── Preparacao dos dados ────────────────────────────────────────────────
     df_map = df_run.copy()
     if poly_col:
-        # Tem polylines — filtra só por polyline, não precisa lat/lng
         df_map = df_map[df_map[poly_col].notna() & (df_map[poly_col].astype(str).str.len() > 4)]
     elif has_ll:
-        # Sem polylines — usa pontos de início (lat/lng)
         df_map = df_map[df_map["latitude"].notna() & df_map["longitude"].notna()]
-
+    df_map = df_map.sort_values("start_date", ascending=False)
 
     if df_map.empty:
         st.warning("Nenhuma atividade com dados de GPS no periodo selecionado.")
     else:
+        # ── Seletor individual de atividades ──────────────────────────────────
         def _make_label(row):
-            dt    = row["start_date"].strftime("%d/%m/%Y")
-            nm    = str(row.get("name") or "")[:35]
-            km    = round(float(row.get("distance_km") or 0), 1)
+            dt  = row["start_date"].strftime("%d/%m/%Y")
+            nm  = str(row.get("name") or "")[:35]
+            km  = round(float(row.get("distance_km") or 0), 1)
             int_v = str(row.get("Intensidade") or "")
             int_tag = f" [{int_v}]" if int_v and int_v != "None" else ""
             return f"{dt} — {nm} ({km}km){int_tag}"
@@ -1614,7 +1645,7 @@ with tab_mapa:
             "Selecione atividades para exibir e comparar",
             options=_all_labels,
             default=_all_labels[:min(10, len(_all_labels))],
-            help="Digite para buscar por nome, data ou distância.",
+            help="Digite para buscar por nome, data ou distância. Selecione várias para comparar no mapa e no gráfico de pace.",
             placeholder="Busque por nome, data ou distância...",
         )
 
@@ -1624,8 +1655,7 @@ with tab_mapa:
 
         _sel_ids = [_label_to_id[l] for l in sel_labels]
         df_map   = df_map[df_map["id"].isin(_sel_ids)].copy()
-        st.caption(f"**{len(df_map)}** atividade(s) · {len(_all_labels)} disponíveis no período")
-
+        st.caption(f"**{len(df_map)}** atividade(s) selecionada(s) · {len(_all_labels)} disponíveis no período")
 
         if poly_col and not df_map.empty:
             _fc = decode_polyline(df_map[poly_col].dropna().iloc[0])
@@ -1642,9 +1672,12 @@ with tab_mapa:
             return INTENSITY_COLORS.get(int_val, BLUE)
 
         def pace_to_hex(pace_sec):
+            # RED = rápido (baixo t), GREEN = lento (alto t)
             t = min(1, max(0, (float(pace_sec or 300) - 220) / 200))
-            return "#{:02X}{:02X}{:02X}".format(
-                round(46+t*185), round(204-t*128), round(113-t*53))
+            r = round(231 - t * (231 - 46))
+            g = round(76  + t * (204 - 76))
+            b = round(60  + t * (113 - 60))
+            return "#{:02X}{:02X}{:02X}".format(r, g, b)
 
         # Monta lista de rotas
         routes = []
@@ -1740,31 +1773,6 @@ with tab_mapa:
                                      f'box-shadow:0 1px 3px rgba(0,0,0,.5)">{last}</div>',
                                 icon_size=(22,15), icon_anchor=(11,7)
                             )).add_to(fg)
-                            
-                def _popup(r):
-                    n = r["name"][:30]
-                    dt = r["date"]
-                    km = r["km"]
-                    pc = r["pace"]
-                    hr = r["hr"] or "—"
-                    ci = r["color_hex"]
-                    it = r["intensity"]
-                    return (
-                        "<div style='font-family:sans-serif;min-width:190px;padding:2px'>"
-                        "<b style='font-size:13px'>" + n + "</b><br>"
-                        "<span style='color:#888;font-size:11px'>" + dt + "</span>"
-                        "<table style='font-size:12px;width:100%;margin-top:6px'>"
-                        "<tr><td style='color:#888;padding:2px 10px 2px 0'>Dist</td>"
-                        "<td><b>" + str(km) + " km</b></td></tr>"
-                        "<tr><td style='color:#888;padding:2px 10px 2px 0'>Pace</td>"
-                        "<td><b>" + pc + "/km</b></td></tr>"
-                        "<tr><td style='color:#888;padding:2px 10px 2px 0'>FC</td>"
-                        "<td><b>" + str(hr) + " bpm</b></td></tr>"
-                        "</table>"
-                        "<div style='margin-top:7px;padding:3px 8px;border-radius:4px;"
-                        "background:" + ci + "20;border-left:3px solid " + ci + ";"
-                        "font-size:11px;color:#444'>" + it + "</div></div>"
-                    )
 
                 def _lap_popup_html(lap, r):
                     ln  = int(lap.get("lap_index", 0) or 0)
@@ -1796,7 +1804,32 @@ with tab_mapa:
                         "font-size:11px;font-weight:600'>Lap " + str(ln) + " · " + str(dk) + " km</div>"
                         "<table style='font-size:11px;width:100%'>" + rows + "</table></div>"
                     )
-                
+
+                def _popup(r):
+                    n = r["name"][:30]
+                    dt = r["date"]
+                    km = r["km"]
+                    pc = r["pace"]
+                    hr = r["hr"] or "—"
+                    ci = r["color_hex"]
+                    it = r["intensity"]
+                    return (
+                        "<div style='font-family:sans-serif;min-width:190px;padding:2px'>"
+                        "<b style='font-size:13px'>" + n + "</b><br>"
+                        "<span style='color:#888;font-size:11px'>" + dt + "</span>"
+                        "<table style='font-size:12px;width:100%;margin-top:6px'>"
+                        "<tr><td style='color:#888;padding:2px 10px 2px 0'>Dist</td>"
+                        "<td><b>" + str(km) + " km</b></td></tr>"
+                        "<tr><td style='color:#888;padding:2px 10px 2px 0'>Pace</td>"
+                        "<td><b>" + pc + "/km</b></td></tr>"
+                        "<tr><td style='color:#888;padding:2px 10px 2px 0'>FC</td>"
+                        "<td><b>" + str(hr) + " bpm</b></td></tr>"
+                        "</table>"
+                        "<div style='margin-top:7px;padding:3px 8px;border-radius:4px;"
+                        "background:" + ci + "20;border-left:3px solid " + ci + ";"
+                        "font-size:11px;color:#444'>" + it + "</div></div>"
+                    )
+
                 for r in _routes_snap:
                     _fg_name = r["date"] + " — " + r["name"][:20] + " (" + str(r["km"]) + "km)"
                     fg = folium.FeatureGroup(name=_fg_name, show=True)
@@ -1812,58 +1845,63 @@ with tab_mapa:
                         # ── VISUAL: animação colorida por modo ──────────────
                         if mode_map == "Intensidade":
                             if _ant:
-                                AntPath(coords_all, color=r["color_hex"], weight=4.5,
-                                        dash_array=[12, 20], delay=800, opacity=0.92).add_to(fg)
+                                AntPath(r["coords"], color=r["color_hex"], weight=4.5,
+                                        dash_array=[12, 20], delay=800, opacity=0.92,
+                                        popup=pop).add_to(fg)
                             else:
-                                folium.PolyLine(coords_all, color=r["color_hex"],
-                                               weight=4.5, opacity=0.9).add_to(fg)
-                        elif not act_laps.empty and n_pts > 0:
-                            total_km = act_laps["distance_km"].sum()
-                            cum = 0.0
-                            for _, lap in act_laps.iterrows():
-                                frac = (float(lap["distance_km"]) / total_km
-                                        if total_km > 0 else 1 / len(act_laps))
-                                i0 = int(cum * n_pts)
-                                i1 = min(n_pts, int((cum + frac) * n_pts) + 1)
-                                seg = coords_all[i0:i1 + 1]
-                                if len(seg) >= 2:
-                                    cseg = _seg_color(lap, r, mode_map)
-                                    if _ant:
-                                        AntPath(seg, color=cseg, weight=5,
-                                                dash_array=[12, 20], delay=800,
-                                                opacity=0.9).add_to(fg)
-                                    else:
-                                        folium.PolyLine(seg, color=cseg,
-                                                       weight=5, opacity=0.9).add_to(fg)
-                                cum += frac
+                                folium.PolyLine(r["coords"], color=r["color_hex"],
+                                               weight=4.5, opacity=0.9,
+                                               popup=pop).add_to(fg)
                         else:
-                            cseg = _seg_color({}, r, mode_map)
-                            if _ant:
-                                AntPath(coords_all, color=cseg, weight=5,
-                                        dash_array=[12, 20], delay=800, opacity=0.9).add_to(fg)
+                            coords_all = r["coords"]
+                            n_pts = len(coords_all) - 1
+                            if not act_laps.empty and n_pts > 0:
+                                total_km = act_laps["distance_km"].sum()
+                                cum = 0.0
+                                for _, lap in act_laps.iterrows():
+                                    frac = (float(lap["distance_km"]) / total_km
+                                            if total_km > 0 else 1 / len(act_laps))
+                                    i0 = int(cum * n_pts)
+                                    i1 = min(n_pts, int((cum + frac) * n_pts) + 1)
+                                    seg = coords_all[i0:i1 + 1]
+                                    if len(seg) >= 2:
+                                        cseg = _seg_color(lap, r, mode_map)
+                                        if _ant:
+                                            AntPath(seg, color=cseg, weight=5,
+                                                    dash_array=[12, 20], delay=800,
+                                                    opacity=0.9).add_to(fg)
+                                        else:
+                                            folium.PolyLine(seg, color=cseg,
+                                                           weight=5, opacity=0.9).add_to(fg)
+                                    cum += frac
                             else:
-                                folium.PolyLine(coords_all, color=cseg,
-                                               weight=5, opacity=0.9).add_to(fg)
+                                cseg = _seg_color({}, r, mode_map)
+                                if _ant:
+                                    AntPath(coords_all, color=cseg, weight=5,
+                                            dash_array=[12, 20], delay=800,
+                                            opacity=0.9).add_to(fg)
+                                else:
+                                    folium.PolyLine(coords_all, color=cseg,
+                                                   weight=5, opacity=0.9).add_to(fg)
 
                         # ── INTERATIVO: overlays invisíveis com popup por lap ──
                         if not act_laps.empty and n_pts > 0:
-                            total_km = act_laps["distance_km"].sum()
-                            cum = 0.0
-                            for _, lap in act_laps.iterrows():
-                                frac = (float(lap["distance_km"]) / total_km
-                                        if total_km > 0 else 1 / len(act_laps))
-                                i0 = int(cum * n_pts)
-                                i1 = min(n_pts, int((cum + frac) * n_pts) + 1)
-                                seg = coords_all[i0:i1 + 1]
-                                if len(seg) >= 2:
+                            total_km2 = act_laps["distance_km"].sum()
+                            cum2 = 0.0
+                            for _, lap2 in act_laps.iterrows():
+                                frac2 = (float(lap2["distance_km"]) / total_km2
+                                         if total_km2 > 0 else 1 / len(act_laps))
+                                i02 = int(cum2 * n_pts)
+                                i12 = min(n_pts, int((cum2 + frac2) * n_pts) + 1)
+                                seg2 = coords_all[i02:i12 + 1]
+                                if len(seg2) >= 2:
                                     folium.PolyLine(
-                                        seg, color=r["color_hex"],
+                                        seg2, color=r["color_hex"],
                                         weight=10, opacity=0.001,
-                                        popup=folium.Popup(_lap_popup_html(lap, r), max_width=220)
+                                        popup=folium.Popup(_lap_popup_html(lap2, r), max_width=220)
                                     ).add_to(fg)
-                                cum += frac
+                                cum2 += frac2
                         else:
-                            # Sem dados de lap — popup da atividade como fallback
                             folium.PolyLine(
                                 coords_all, color=r["color_hex"],
                                 weight=8, opacity=0.001,
@@ -1897,10 +1935,10 @@ with tab_mapa:
                 )
                 _li_pace = (
                     "<div style='display:flex;align-items:center;gap:5px;"
-                    "color:rgba(255,255,255,.8)'><span>lento</span>"
+                    "color:rgba(255,255,255,.8)'><span>rápido</span>"
                     "<div style='width:50px;height:5px;border-radius:3px;"
                     "background:linear-gradient(to right,rgb(231,76,60),rgb(46,204,113))'>"
-                    "</div><span>rápido</span></div>"
+                    "</div><span>lento</span></div>"
                 )
                 _li_fc = "".join(
                     "<div style='display:flex;align-items:center;gap:6px;margin:3px 0;"
@@ -1926,7 +1964,7 @@ with tab_mapa:
                 }
                 leg_title, leg_items = _LEG.get(mode_map, ("", ""))
                 legend_html = (
-                    "<div style='position:absolute;bottom:36px;left:8px;z-index:9999;"
+                    "<div style='position:absolute;bottom:36px;right:52px;z-index:9999;"
                     "background:rgba(10,10,10,0.72);padding:9px 13px;border-radius:10px;"
                     "font-size:12px;color:rgba(255,255,255,.9)'>"
                     "<div style='font-weight:600;margin-bottom:5px'>" + leg_title + "</div>"
@@ -1934,7 +1972,10 @@ with tab_mapa:
                 )
                 m.get_root().html.add_child(folium.Element(legend_html))
 
-                st_folium(m, use_container_width=True, height=500, returned_objects=[])
+                _map_h = st.select_slider(
+                    "Altura do mapa", options=[350,450,550,650,800], value=500,
+                    help="Arrasta para expandir o mapa")
+                st_folium(m, use_container_width=True, height=_map_h, returned_objects=[])
                 _hint = "Clique numa rota para detalhes" if _poly_snap else "Tamanho = distância"
                 st.caption(
                     _hint + " · Ative/desative rotas no controle (canto superior direito) · "
@@ -1976,13 +2017,16 @@ with tab_mapa:
                 laps_r["pace_min"] = laps_r["pace_sec_km"] / 60
                 laps_r["pace_fmt"] = laps_r["pace_sec_km"].apply(fmt_pace)
 
+                _DIST_COLS = ["#E74C3C","#3498DB","#2ECC71","#9B59B6","#F39C12"]
+                _ci = len([x for x in all_paces_cmp]) % len(_DIST_COLS) if all_paces_cmp else 0
+                _col = _DIST_COLS[len([t for t in fig_cmp.data]) % len(_DIST_COLS)]
                 fig_cmp.add_trace(go.Scatter(
                     x=laps_r["lap_index"],
                     y=laps_r["pace_min"],
                     name=label[:38],
                     mode="lines+markers",
-                    line=dict(color=r["color_hex"], width=2.5),
-                    marker=dict(size=6, color=r["color_hex"]),
+                    line=dict(color=_col, width=2.5),
+                    marker=dict(size=6, color=_col),
                     customdata=laps_r["pace_fmt"],
                     hovertemplate="Km %{x}<br>Pace: %{customdata}/km<extra></extra>",
                 ))

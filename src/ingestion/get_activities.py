@@ -222,6 +222,12 @@ def extract_fields(activity, detail=None, streams=None):
     if streams:
         hr_data  = streams.get("heartrate", {}).get("data", [])
         cad_data = streams.get("cadence",   {}).get("data", [])
+        alt_data = streams.get("altitude", {}).get("data", [])
+        
+        if alt_data:
+            import json
+            # Amostra 1 em cada 3 pontos para não inflar o CSV
+            record["altitude_stream"] = json.dumps(alt_data[::3])
 
         if hr_data:
             record["stream_hr_min"] = min(hr_data)
