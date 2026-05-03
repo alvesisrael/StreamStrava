@@ -387,11 +387,11 @@ with _col2:
 _quick_cols = st.sidebar.columns(3)
 _today = _dt.date.today()
 _quick = {
-    "7d":   (_today - _dt.timedelta(days=7),  _today),
-    "30d":  (_today - _dt.timedelta(days=30), _today),
-    "3m":   (_today - _dt.timedelta(days=90), _today),
-    "6m":   (_today - _dt.timedelta(days=180),_today),
-    "Ano":  (_dt.date(_today.year, 1, 1),      _today),
+    "7d":   (max(min_d, _today - _dt.timedelta(days=7)),   min(_today, max_d)),
+    "30d":  (max(min_d, _today - _dt.timedelta(days=30)),  min(_today, max_d)),
+    "3m":   (max(min_d, _today - _dt.timedelta(days=90)),  min(_today, max_d)),
+    "6m":   (max(min_d, _today - _dt.timedelta(days=180)), min(_today, max_d)),
+    "Ano":  (max(min_d, _dt.date(_today.year, 1, 1)),      min(_today, max_d)),
     "Tudo": (min_d, max_d),
 }
 for _i, (_lbl, _rng) in enumerate(_quick.items()):
