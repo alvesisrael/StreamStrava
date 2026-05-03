@@ -2075,7 +2075,7 @@ with tab_mapa:
             sel_3d = st.selectbox("Selecione uma corrida para ver em 3D",
                                   options=_opts_3d, key="sel_3d") if _opts_3d else None
 
-            if sel_3d:
+        if sel_3d:
                 r3d = next((r for r in routes
                             if r["date"] + " — " + r["name"] + " (" + str(r["km"]) + "km)" == sel_3d), None)
                 if r3d:
@@ -2083,21 +2083,45 @@ with tab_mapa:
                     laps_3d    = lps_run[lps_run["activity_id"] == r3d["id"]].sort_values("lap_index")
 
                     if coords_3d and not laps_3d.empty:
+                        import ast
+                        import numpy as np
+
                         n     = len(coords_3d)
-                        alts  = [0.0] * n
                         n_pts = n - 1
-                        total_km_lap = laps_3d["distance_km"].sum()
-                        cum_alt, cum_frac = 0.0, 0.0
-                        for _, lap in laps_3d.iterrows():
-                            frac = float(lap["distance_km"]) / total_km_lap if total_km_lap > 0 else 1 / len(laps_3d)
-                            gain = float(lap.get("total_elevation_gain") or 0)
-                            i0 = int(cum_frac * n_pts)
-                            i1 = min(n_pts, int((cum_frac + frac) * n_pts) + 1)
-                            for i in range(i0, i1 + 1):
-                                progress = (i - i0) / max(1, i1 - i0)
-                                alts[i] = cum_alt + gain * progress
-                            cum_alt  += gain
-                            cum_frac += frac
+
+                        # ── Tenta usar altitude_stream real do GPS ────────────
+                        _usou_stream = False
+                        alt_stream_raw = df_map[df_map["id"] == r3d["id"]]["altitude_stream"].values
+
+                        if (len(alt_stream_raw) > 0
+                                and str(alt_stream_raw[0]) not in ("nan", "None", "")
+                                and len(str(alt_stream_raw[0])) > 4):
+                            try:
+                                alts_raw = ast.literal_eval(str(alt_stream_raw[0]))
+                                alts = np.interp(
+                                    np.linspace(0, 1, n),
+                                    np.linspace(0, 1, len(alts_raw)),
+                                    alts_raw
+                                ).tolist()
+                                _usou_stream = True
+                            except Exception:
+                                pass
+
+                        # ── Fallback: estimativa pelos laps ───────────────────
+                        if not _usou_stream:
+                            alts  = [0.0] * n
+                            total_km_lap = laps_3d["distance_km"].sum()
+                            cum_alt, cum_frac = 0.0, 0.0
+                            for _, lap in laps_3d.iterrows():
+                                frac = float(lap["distance_km"]) / total_km_lap if total_km_lap > 0 else 1 / len(laps_3d)
+                                gain = float(lap.get("total_elevation_gain") or 0)
+                                i0 = int(cum_frac * n_pts)
+                                i1 = min(n_pts, int((cum_frac + frac) * n_pts) + 1)
+                                for i in range(i0, i1 + 1):
+                                    progress = (i - i0) / max(1, i1 - i0)
+                                    alts[i] = cum_alt + gain * progress
+                                cum_alt  += gain
+                                cum_frac += frac
 
                         lats_3d = [c[0] for c in coords_3d]
                         lngs_3d = [c[1] for c in coords_3d]
@@ -2106,7 +2130,7 @@ with tab_mapa:
                         lat_range = (max(lats_3d) - min(lats_3d)) or 0.001
                         alt_min_v = min(alts)
                         alt_range = (max(alts) - alt_min_v) or 1
-                        EXAG = 8  # exageração vertical (ajusta conforme o percurso)
+                        EXAG = 8
                         alts_viz = [
                             min(lats_3d) + (a - alt_min_v) / alt_range * lat_range * EXAG
                             for a in alts
@@ -2117,7 +2141,7 @@ with tab_mapa:
                         fig3d = go.Figure(data=go.Scatter3d(
                             x=lngs_3d,
                             y=lats_3d,
-                            z=alts_viz,          # altitude escalada
+                            z=alts_viz,
                             mode="lines",
                             line=dict(
                                 color=colors_3d,
@@ -2150,9 +2174,12 @@ with tab_mapa:
                             ),
                             height=520,
                             margin=dict(l=0, r=0, b=0, t=40),
-                    )
+                        )
                         st.plotly_chart(fig3d, width="stretch")
-                        st.caption("⚠️ Altitude estimada pela elevação acumulada dos laps — mostra a forma do percurso, não a altitude absoluta. Arrasta para rodar · scroll para zoom.")
+                        if _usou_stream:
+                            st.caption("✅ Altitude real do GPS. Arrasta para rodar · scroll para zoom.")
+                        else:
+                            st.caption("⚠️ Altitude estimada pelos laps (stream não disponível). Arrasta para rodar · scroll para zoom.")
         
         
         
