@@ -2048,6 +2048,76 @@ with tab_mapa:
                 st.info("Dados de laps nao encontrados para as corridas selecionadas. "
                         "Verifique se `activity_laps_consolidated.csv` esta atualizado.")
 
+        # ── SECAO 3: Perfil 3D de elevação ───────────────────────────────────
+        if poly_col and not lps_run.empty:
+            st.markdown("---")
+            st.subheader("⛰️ Perfil 3D da rota")
+
+            _opts_3d = [r["date"] + " — " + r["name"] + " (" + str(r["km"]) + "km)"
+                        for r in routes]
+            sel_3d = st.selectbox("Selecione uma corrida para ver em 3D",
+                                  options=_opts_3d, key="sel_3d") if _opts_3d else None
+
+            if sel_3d:
+                r3d = next((r for r in routes
+                            if r["date"] + " — " + r["name"] + " (" + str(r["km"]) + "km)" == sel_3d), None)
+                if r3d:
+                    coords_3d  = r3d["coords"]
+                    laps_3d    = lps_run[lps_run["activity_id"] == r3d["id"]].sort_values("lap_index")
+
+                    if coords_3d and not laps_3d.empty:
+                        n     = len(coords_3d)
+                        alts  = [0.0] * n
+                        n_pts = n - 1
+                        total_km_lap = laps_3d["distance_km"].sum()
+                        cum_alt, cum_frac = 0.0, 0.0
+                        for _, lap in laps_3d.iterrows():
+                            frac = float(lap["distance_km"]) / total_km_lap if total_km_lap > 0 else 1 / len(laps_3d)
+                            gain = float(lap.get("total_elevation_gain") or 0)
+                            i0 = int(cum_frac * n_pts)
+                            i1 = min(n_pts, int((cum_frac + frac) * n_pts) + 1)
+                            for i in range(i0, i1 + 1):
+                                progress = (i - i0) / max(1, i1 - i0)
+                                alts[i] = cum_alt + gain * progress
+                            cum_alt  += gain
+                            cum_frac += frac
+
+                        lats_3d   = [c[0] for c in coords_3d]
+                        lngs_3d   = [c[1] for c in coords_3d]
+                        alt_min   = min(alts)
+                        alt_range = max(1, max(alts) - alt_min)
+                        colors_3d = [(a - alt_min) / alt_range for a in alts]
+
+                        import plotly.graph_objects as go3d
+                        fig3d = go.Figure(data=go.Scatter3d(
+                            x=lngs_3d, y=lats_3d, z=alts,
+                            mode="lines",
+                            line=dict(
+                                color=colors_3d,
+                                colorscale=[[0,"#27AE60"],[0.5,"#F1C40F"],[1,"#E74C3C"]],
+                                width=6,
+                                colorbar=dict(title="Alt (m)", thickness=12, len=0.5),
+                            ),
+                            hovertemplate="Lat: %{y:.4f}<br>Lng: %{x:.4f}<br>Alt acum.: %{z:.0f}m<extra></extra>",
+                        ))
+                        fig3d.update_layout(
+                            title=f"Perfil 3D — {r3d['name']} ({r3d['km']}km)",
+                            scene=dict(
+                                xaxis_title="Longitude",
+                                yaxis_title="Latitude",
+                                zaxis_title="Elevação acum. (m)",
+                                aspectmode="manual",
+                                aspectratio=dict(x=2, y=2, z=0.4),
+                                camera=dict(eye=dict(x=1.5, y=-1.5, z=0.8)),
+                            ),
+                            height=520,
+                            margin=dict(l=0, r=0, b=0, t=40),
+                        )
+                        st.plotly_chart(fig3d, width="stretch")
+                        st.caption("⚠️ Altitude estimada pela elevação acumulada dos laps — mostra a forma do percurso, não a altitude absoluta. Arrasta para rodar · scroll para zoom.")
+        
+        
+        
 with tab_hist:
     st.title("📋 Histórico de Corridas")
 
