@@ -207,8 +207,22 @@ def main():
             ].map(full_map)
             preen_hd = (df["map_polyline"].astype(str).str.len() > 2).sum()
             print(f"  ✅ map_polyline HD: {preen_hd}/{len(df)} atividades.")
-            
-    df.to_csv(csv_path, sep=";", encoding="utf-8-sig", index=False)
+
+    # ── altitude stream (opcional, --altitude) ────────────────────────────────
+    if args.altitude:
+        if "altitude_stream" not in df.columns:
+            df["altitude_stream"] = ""
+        ids_sem_alt = df.loc[
+            df["altitude_stream"].isna() | (df["altitude_stream"].astype(str).str.len() <= 2),
+            "id"
+        ].tolist()
+        print(f"\n🔍 {len(ids_sem_alt)} atividades sem altitude stream.")
+        if ids_sem_alt:
+            alt_map = fetch_altitude_streams(args.token, ids_sem_alt)
+            df.loc[df["id"].isin(ids_sem_alt), "altitude_stream"] = \
+                df.loc[df["id"].isin(ids_sem_alt), "id"].map(alt_map)
+            preen_alt = (df["altitude_stream"].astype(str).str.len() > 2).sum()
+            print(f"  ✅ altitude_stream: {preen_alt}/{len(df)} atividades.")
 
     # ── Salva CSV ──────────────────────────────────────────────────────────────
     df.to_csv(csv_path, sep=";", encoding="utf-8-sig", index=False)

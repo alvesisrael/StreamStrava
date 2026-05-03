@@ -2082,37 +2082,58 @@ with tab_mapa:
                             cum_alt  += gain
                             cum_frac += frac
 
-                        lats_3d   = [c[0] for c in coords_3d]
-                        lngs_3d   = [c[1] for c in coords_3d]
-                        alt_min   = min(alts)
-                        alt_range = max(1, max(alts) - alt_min)
-                        colors_3d = [(a - alt_min) / alt_range for a in alts]
+                        lats_3d = [c[0] for c in coords_3d]
+                        lngs_3d = [c[1] for c in coords_3d]
 
-                        import plotly.graph_objects as go3d
+                        # Normaliza altitude para escala lat/lng com exageração vertical
+                        lat_range = (max(lats_3d) - min(lats_3d)) or 0.001
+                        alt_min_v = min(alts)
+                        alt_range = (max(alts) - alt_min_v) or 1
+                        EXAG = 8  # exageração vertical (ajusta conforme o percurso)
+                        alts_viz = [
+                            min(lats_3d) + (a - alt_min_v) / alt_range * lat_range * EXAG
+                            for a in alts
+                        ]
+
+                        colors_3d = [(a - alt_min_v) / alt_range for a in alts]
+
                         fig3d = go.Figure(data=go.Scatter3d(
-                            x=lngs_3d, y=lats_3d, z=alts,
+                            x=lngs_3d,
+                            y=lats_3d,
+                            z=alts_viz,          # altitude escalada
                             mode="lines",
                             line=dict(
                                 color=colors_3d,
                                 colorscale=[[0,"#27AE60"],[0.5,"#F1C40F"],[1,"#E74C3C"]],
                                 width=6,
-                                colorbar=dict(title="Alt (m)", thickness=12, len=0.5),
+                                colorbar=dict(
+                                    title="Alt (m)",
+                                    tickvals=[0, 0.25, 0.5, 0.75, 1],
+                                    ticktext=[
+                                        f"{alt_min_v:.0f}",
+                                        f"{alt_min_v + alt_range*0.25:.0f}",
+                                        f"{alt_min_v + alt_range*0.5:.0f}",
+                                        f"{alt_min_v + alt_range*0.75:.0f}",
+                                        f"{alt_min_v + alt_range:.0f}",
+                                    ],
+                                    thickness=12, len=0.5
+                                ),
                             ),
-                            hovertemplate="Lat: %{y:.4f}<br>Lng: %{x:.4f}<br>Alt acum.: %{z:.0f}m<extra></extra>",
+                            customdata=alts,
+                            hovertemplate="Lat: %{y:.4f}<br>Lng: %{x:.4f}<br>Alt: %{customdata:.0f}m<extra></extra>",
                         ))
                         fig3d.update_layout(
                             title=f"Perfil 3D — {r3d['name']} ({r3d['km']}km)",
                             scene=dict(
                                 xaxis_title="Longitude",
                                 yaxis_title="Latitude",
-                                zaxis_title="Elevação acum. (m)",
-                                aspectmode="manual",
-                                aspectratio=dict(x=2, y=2, z=0.4),
+                                zaxis_title=f"Altitude (×{EXAG} exag.)",
+                                aspectmode="cube",
                                 camera=dict(eye=dict(x=1.5, y=-1.5, z=0.8)),
                             ),
                             height=520,
                             margin=dict(l=0, r=0, b=0, t=40),
-                        )
+                    )
                         st.plotly_chart(fig3d, width="stretch")
                         st.caption("⚠️ Altitude estimada pela elevação acumulada dos laps — mostra a forma do percurso, não a altitude absoluta. Arrasta para rodar · scroll para zoom.")
         
