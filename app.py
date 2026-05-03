@@ -1726,15 +1726,32 @@ with tab_mapa:
                     "Elevacao por segmento",
                 ]
                 mode_map = st.radio("Colorir rotas por", _MODES, horizontal=True)
-                tile_map = st.radio("Mapa base", ["Claro","Escuro","Topografico"],
-                                    horizontal=True)
-                tile_urls = {
-                    "Claro":       "CartoDB positron",
-                    "Escuro":      "CartoDB dark_matter",
-                    "Topografico": "OpenTopoMap",
-                }
+                tile_map = st.radio(
+                    "Mapa base",
+                    ["Claro", "Escuro", "Topográfico", "Satélite", "Topo ESRI", "Voyager"],
+                    horizontal=True,
+                    help="Satélite e Topo ESRI são os melhores para trail. Voyager é mais detalhado para asfalto urbano."
+                )
+
+                ESRI_SAT_URL   = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+                ESRI_SAT_ATTR  = "Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community"
+                ESRI_TOPO_URL  = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}"
+                ESRI_TOPO_ATTR = "Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ, TomTom, Intermap, iPC, USGS, FAO, NPS, NRCAN, GeoBase, Kadaster NL, Ordnance Survey, Esri Japan, METI, Esri China (Hong Kong), and the GIS User Community"
+
                 m = folium.Map(location=[_lat2, _lng2], zoom_start=13, tiles=None)
-                folium.TileLayer(tile_urls[tile_map], name=tile_map).add_to(m)
+
+                if tile_map == "Claro":
+                    folium.TileLayer("CartoDB positron", name="Claro").add_to(m)
+                elif tile_map == "Escuro":
+                    folium.TileLayer("CartoDB dark_matter", name="Escuro").add_to(m)
+                elif tile_map == "Topográfico":
+                    folium.TileLayer("OpenTopoMap", name="Topográfico").add_to(m)
+                elif tile_map == "Satélite":
+                    folium.TileLayer(ESRI_SAT_URL, attr=ESRI_SAT_ATTR, name="Satélite ESRI").add_to(m)
+                elif tile_map == "Topo ESRI":
+                    folium.TileLayer(ESRI_TOPO_URL, attr=ESRI_TOPO_ATTR, name="Topo ESRI").add_to(m)
+                elif tile_map == "Voyager":
+                    folium.TileLayer("CartoDB Voyager", name="Voyager").add_to(m)
 
                 try:
                     from folium.plugins import AntPath, MiniMap
