@@ -2065,121 +2065,223 @@ with tab_mapa:
                 st.info("Dados de laps nao encontrados para as corridas selecionadas. "
                         "Verifique se `activity_laps_consolidated.csv` esta atualizado.")
 
-        # ── SECAO 3: Perfil 3D de elevação ───────────────────────────────────
+        # ── SECAO 3: Perfil de elevação — mapa satélite + gráfico ────────────
         if poly_col and not lps_run.empty:
             st.markdown("---")
-            st.subheader("⛰️ Perfil 3D da rota")
+            st.subheader("⛰️ Perfil de Elevação na Rota")
 
-            _opts_3d = [r["date"] + " — " + r["name"] + " (" + str(r["km"]) + "km)"
-                        for r in routes]
-            sel_3d = st.selectbox("Selecione uma corrida para ver em 3D",
-                                  options=_opts_3d, key="sel_3d") if _opts_3d else None
+            _opts_elv = [r["date"] + " — " + r["name"] + " (" + str(r["km"]) + "km)"
+                         for r in routes]
+            sel_elv = st.selectbox("Selecione uma corrida para ver o perfil",
+                                   options=_opts_elv, key="sel_elv") if _opts_elv else None
 
-        if sel_3d:
-                r3d = next((r for r in routes
-                            if r["date"] + " — " + r["name"] + " (" + str(r["km"]) + "km)" == sel_3d), None)
-                if r3d:
-                    coords_3d  = r3d["coords"]
-                    laps_3d    = lps_run[lps_run["activity_id"] == r3d["id"]].sort_values("lap_index")
+            if sel_elv:
+                r_elv = next((r for r in routes
+                              if r["date"] + " — " + r["name"] + " (" + str(r["km"]) + "km)" == sel_elv), None)
 
-                    if coords_3d and not laps_3d.empty:
-                        import ast
-                        import numpy as np
+                if r_elv and r_elv["coords"]:
+                    import ast
+                    import numpy as np
 
-                        n     = len(coords_3d)
-                        n_pts = n - 1
+                    coords_elv = r_elv["coords"]
+                    n_elv      = len(coords_elv)
 
-                        # ── Tenta usar altitude_stream real do GPS ────────────
-                        _usou_stream = False
-                        alt_stream_raw = df_map[df_map["id"] == r3d["id"]]["altitude_stream"].values
+                    # ── Carrega altitude_stream ───────────────────────────────
+                    _usou_stream = False
+                    alt_stream_raw = df_map[df_map["id"] == r_elv["id"]]["altitude_stream"].values
+                    alts_elv = []
 
-                        if (len(alt_stream_raw) > 0
-                                and str(alt_stream_raw[0]) not in ("nan", "None", "")
-                                and len(str(alt_stream_raw[0])) > 4):
-                            try:
-                                alts_raw = ast.literal_eval(str(alt_stream_raw[0]))
-                                alts = np.interp(
-                                    np.linspace(0, 1, n),
-                                    np.linspace(0, 1, len(alts_raw)),
-                                    alts_raw
-                                ).tolist()
-                                _usou_stream = True
-                            except Exception:
-                                pass
+                    if (len(alt_stream_raw) > 0
+                            and str(alt_stream_raw[0]) not in ("nan", "None", "")
+                            and len(str(alt_stream_raw[0])) > 4):
+                        try:
+                            alts_raw = ast.literal_eval(str(alt_stream_raw[0]))
+                            alts_elv = np.interp(
+                                np.linspace(0, 1, n_elv),
+                                np.linspace(0, 1, len(alts_raw)),
+                                alts_raw
+                            ).tolist()
+                            _usou_stream = True
+                        except Exception:
+                            pass
 
-                        # ── Fallback: estimativa pelos laps ───────────────────
-                        if not _usou_stream:
-                            alts  = [0.0] * n
-                            total_km_lap = laps_3d["distance_km"].sum()
+                    # ── Fallback: estimativa pelos laps ───────────────────────
+                    if not _usou_stream:
+                        laps_elv = lps_run[lps_run["activity_id"] == r_elv["id"]].sort_values("lap_index")
+                        alts_elv = [0.0] * n_elv
+                        if not laps_elv.empty:
+                            n_pts_elv    = n_elv - 1
+                            total_km_elv = laps_elv["distance_km"].sum()
                             cum_alt, cum_frac = 0.0, 0.0
-                            for _, lap in laps_3d.iterrows():
-                                frac = float(lap["distance_km"]) / total_km_lap if total_km_lap > 0 else 1 / len(laps_3d)
+                            for _, lap in laps_elv.iterrows():
+                                frac = float(lap["distance_km"]) / total_km_elv if total_km_elv > 0 else 1 / len(laps_elv)
                                 gain = float(lap.get("total_elevation_gain") or 0)
-                                i0 = int(cum_frac * n_pts)
-                                i1 = min(n_pts, int((cum_frac + frac) * n_pts) + 1)
+                                i0 = int(cum_frac * n_pts_elv)
+                                i1 = min(n_pts_elv, int((cum_frac + frac) * n_pts_elv) + 1)
                                 for i in range(i0, i1 + 1):
                                     progress = (i - i0) / max(1, i1 - i0)
-                                    alts[i] = cum_alt + gain * progress
+                                    alts_elv[i] = cum_alt + gain * progress
                                 cum_alt  += gain
                                 cum_frac += frac
 
-                        lats_3d = [c[0] for c in coords_3d]
-                        lngs_3d = [c[1] for c in coords_3d]
+                    alt_min_v = min(alts_elv)
+                    alt_max_v = max(alts_elv)
 
-                        # Normaliza altitude para escala lat/lng com exageração vertical
-                        lat_range = (max(lats_3d) - min(lats_3d)) or 0.001
-                        alt_min_v = min(alts)
-                        alt_range = (max(alts) - alt_min_v) or 1
-                        EXAG = 8
-                        alts_viz = [
-                            min(lats_3d) + (a - alt_min_v) / alt_range * lat_range * EXAG
-                            for a in alts
-                        ]
+                    # ── Mapa Folium com satélite + rota colorida por altitude ──
+                    if HAS_FOLIUM:
+                        lat_c_elv = float(np.mean([c[0] for c in coords_elv]))
+                        lng_c_elv = float(np.mean([c[1] for c in coords_elv]))
 
-                        colors_3d = [(a - alt_min_v) / alt_range for a in alts]
+                        ESRI_SAT_URL  = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+                        ESRI_SAT_ATTR = "Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community"
 
-                        fig3d = go.Figure(data=go.Scatter3d(
-                            x=lngs_3d,
-                            y=lats_3d,
-                            z=alts_viz,
-                            mode="lines",
-                            line=dict(
-                                color=colors_3d,
-                                colorscale=[[0,"#27AE60"],[0.5,"#F1C40F"],[1,"#E74C3C"]],
-                                width=6,
-                                colorbar=dict(
-                                    title="Alt (m)",
-                                    tickvals=[0, 0.25, 0.5, 0.75, 1],
-                                    ticktext=[
-                                        f"{alt_min_v:.0f}",
-                                        f"{alt_min_v + alt_range*0.25:.0f}",
-                                        f"{alt_min_v + alt_range*0.5:.0f}",
-                                        f"{alt_min_v + alt_range*0.75:.0f}",
-                                        f"{alt_min_v + alt_range:.0f}",
-                                    ],
-                                    thickness=12, len=0.5
-                                ),
-                            ),
-                            customdata=alts,
-                            hovertemplate="Lat: %{y:.4f}<br>Lng: %{x:.4f}<br>Alt: %{customdata:.0f}m<extra></extra>",
-                        ))
-                        fig3d.update_layout(
-                            title=f"Perfil 3D — {r3d['name']} ({r3d['km']}km)",
-                            scene=dict(
-                                xaxis_title="Longitude",
-                                yaxis_title="Latitude",
-                                zaxis_title=f"Altitude (×{EXAG} exag.)",
-                                aspectmode="cube",
-                                camera=dict(eye=dict(x=1.5, y=-1.5, z=0.8)),
-                            ),
-                            height=520,
-                            margin=dict(l=0, r=0, b=0, t=40),
+                        tile_elv = st.radio(
+                            "Mapa base do perfil",
+                            ["Satélite", "Topo ESRI", "Topográfico"],
+                            horizontal=True,
+                            key="tile_elv"
                         )
-                        st.plotly_chart(fig3d, width="stretch")
-                        if _usou_stream:
-                            st.caption("✅ Altitude real do GPS. Arrasta para rodar · scroll para zoom.")
+
+                        m_elv = folium.Map(location=[lat_c_elv, lng_c_elv],
+                                           zoom_start=14, tiles=None)
+
+                        if tile_elv == "Satélite":
+                            folium.TileLayer(ESRI_SAT_URL, attr=ESRI_SAT_ATTR,
+                                             name="Satélite").add_to(m_elv)
+                        elif tile_elv == "Topo ESRI":
+                            folium.TileLayer(
+                                "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",
+                                attr="Esri", name="Topo ESRI").add_to(m_elv)
                         else:
-                            st.caption("⚠️ Altitude estimada pelos laps (stream não disponível). Arrasta para rodar · scroll para zoom.")
+                            folium.TileLayer("OpenTopoMap", name="Topográfico").add_to(m_elv)
+
+                        # Desenha segmentos coloridos por altitude
+                        alt_range_v = (alt_max_v - alt_min_v) or 1
+                        for i in range(len(coords_elv) - 1):
+                            t = (alts_elv[i] - alt_min_v) / alt_range_v
+                            r_c = round(46  + t * 185)
+                            g_c = round(204 - t * 128)
+                            b_c = round(113 - t * 53)
+                            seg_color = "#{:02X}{:02X}{:02X}".format(r_c, g_c, b_c)
+                            folium.PolyLine(
+                                [coords_elv[i], coords_elv[i + 1]],
+                                color=seg_color, weight=5, opacity=0.92,
+                                tooltip=f"{alts_elv[i]:.0f}m"
+                            ).add_to(m_elv)
+
+                        # Marcadores de início e fim
+                        folium.CircleMarker(
+                            coords_elv[0], radius=7, color="#27AE60",
+                            fill=True, fill_opacity=1,
+                            tooltip=f"Início · {alts_elv[0]:.0f}m"
+                        ).add_to(m_elv)
+                        folium.CircleMarker(
+                            coords_elv[-1], radius=7, color="#E74C3C",
+                            fill=True, fill_opacity=1,
+                            tooltip=f"Fim · {alts_elv[-1]:.0f}m"
+                        ).add_to(m_elv)
+
+                        # Marcador do ponto mais alto
+                        idx_max = int(np.argmax(alts_elv))
+                        folium.Marker(
+                            coords_elv[idx_max],
+                            icon=folium.DivIcon(
+                                html=f'<div style="font-size:11px;font-weight:700;color:#fff;'
+                                     f'background:#E74C3C;padding:2px 7px;border-radius:10px;'
+                                     f'box-shadow:0 1px 4px rgba(0,0,0,.6)">▲ {alts_elv[idx_max]:.0f}m</div>',
+                                icon_size=(80, 22), icon_anchor=(40, 11)
+                            ),
+                            tooltip=f"Ponto mais alto: {alts_elv[idx_max]:.0f}m"
+                        ).add_to(m_elv)
+
+                        # Legenda de altitude
+                        legend_elv = (
+                            "<div style='position:absolute;bottom:36px;right:52px;z-index:9999;"
+                            "background:rgba(10,10,10,0.75);padding:9px 13px;border-radius:10px;"
+                            "font-size:12px;color:#fff'>"
+                            "<div style='font-weight:600;margin-bottom:6px'>Altitude</div>"
+                            "<div style='display:flex;align-items:center;gap:6px'>"
+                            "<div style='width:60px;height:6px;border-radius:3px;"
+                            "background:linear-gradient(to right,#2ECC71,#F1C40F,#E74C3C)'></div></div>"
+                            f"<div style='display:flex;justify-content:space-between;width:60px;"
+                            f"font-size:10px;margin-top:2px'>"
+                            f"<span>{alt_min_v:.0f}m</span><span>{alt_max_v:.0f}m</span></div></div>"
+                        )
+                        m_elv.get_root().html.add_child(folium.Element(legend_elv))
+
+                        # Cards de métricas acima do mapa
+                        gain_total = sum(max(0, alts_elv[i+1] - alts_elv[i])
+                                         for i in range(len(alts_elv)-1))
+                        loss_total = sum(max(0, alts_elv[i] - alts_elv[i+1])
+                                         for i in range(len(alts_elv)-1))
+                        ce1, ce2, ce3, ce4 = st.columns(4)
+                        ce1.metric("▲ Ponto mais alto",  f"{alt_max_v:.0f} m")
+                        ce2.metric("▼ Ponto mais baixo", f"{alt_min_v:.0f} m")
+                        ce3.metric("↑ Subida acumulada", f"{gain_total:.0f} m")
+                        ce4.metric("↓ Descida acumulada",f"{loss_total:.0f} m")
+
+                        st_folium(m_elv, use_container_width=True, height=480,
+                                  returned_objects=[])
+                        st.caption(
+                            ("✅ Altitude real do GPS · " if _usou_stream else "⚠️ Altitude estimada pelos laps · ")
+                            + "Verde = baixo · Vermelho = alto · Hover para ver altitude de cada ponto"
+                        )
+
+                    # ── Perfil de elevação 2D (gráfico de linha) ─────────────
+                    st.markdown("##### 📈 Perfil de elevação")
+
+                    # Calcula distância acumulada em km
+                    import math
+                    def _hav_dist(c1, c2):
+                        la1, lo1 = math.radians(c1[0]), math.radians(c1[1])
+                        la2, lo2 = math.radians(c2[0]), math.radians(c2[1])
+                        d = math.sin((la2-la1)/2)**2 + math.cos(la1)*math.cos(la2)*math.sin((lo2-lo1)/2)**2
+                        return 2 * 6371 * math.asin(math.sqrt(d))
+
+                    dist_acum = [0.0]
+                    for i in range(1, len(coords_elv)):
+                        dist_acum.append(dist_acum[-1] + _hav_dist(coords_elv[i-1], coords_elv[i]))
+
+                    fig_elv = go.Figure()
+                    fig_elv.add_scatter(
+                        x=dist_acum,
+                        y=alts_elv,
+                        mode="lines",
+                        fill="tozeroy",
+                        line=dict(width=0),
+                        fillcolor="rgba(231,76,60,0.15)",
+                        showlegend=False,
+                        hoverinfo="skip",
+                    )
+                    # Linha colorida por altitude
+                    fig_elv.add_scatter(
+                        x=dist_acum,
+                        y=alts_elv,
+                        mode="lines",
+                        line=dict(
+                            color=alts_elv,
+                            colorscale=[[0,"#27AE60"],[0.5,"#F1C40F"],[1,"#E74C3C"]],
+                            width=3,
+                        ),
+                        showlegend=False,
+                        hovertemplate="Km %{x:.2f}<br>Altitude: %{y:.0f}m<extra></extra>",
+                    )
+                    # Marca o ponto mais alto
+                    fig_elv.add_scatter(
+                        x=[dist_acum[idx_max]],
+                        y=[alts_elv[idx_max]],
+                        mode="markers+text",
+                        marker=dict(size=10, color="#E74C3C"),
+                        text=[f"▲ {alts_elv[idx_max]:.0f}m"],
+                        textposition="top center",
+                        showlegend=False,
+                    )
+                    fig_elv.update_layout(
+                        xaxis_title="Distância (km)",
+                        yaxis_title="Altitude (m)",
+                        height=220,
+                        margin=dict(l=0, r=0, t=10, b=40),
+                        plot_bgcolor="rgba(0,0,0,0)")
         
         
         
