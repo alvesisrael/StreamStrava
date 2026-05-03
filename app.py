@@ -1243,7 +1243,7 @@ with tab_metas:
     st.subheader("🔮 Previsões de Prova")
     st.caption(
         "Fórmula de Riegel: **T₂ = T₁ × (D₂/D₁)^1.06** — mesma base usada pelo Strava. "
-        "Cada distância usa a base de referência mais próxima disponível."
+        "Cada previsão usa o melhor esforço numa distância **menor** como ponto de partida."
     )
 
     def _riegel(t1, d1, d2):
@@ -1268,7 +1268,7 @@ with tab_metas:
         km = dist_map.get(dist_label.lower())
         return best_pace * km if km else None
 
-    # Todas as bases disponíveis (nome, tempo_seg, distância_km)
+    # Bases ordenadas da menor para a maior
     _bases = [
         ("1K",       _best_sec("1k"),              1.0),
         ("5K",       _best_sec("5k"),              5.0),
@@ -1281,85 +1281,48 @@ with tab_metas:
     _alvos = [("5K", 5.0), ("10K", 10.0), ("Meia (21K)", 21.097), ("Maratona (42K)", 42.195)]
 
     _CONF = {
-        ("1K",       "5K"):              "⚠️ Estimativa",
-        ("1K",       "10K"):             "⚠️ Estimativa",
-        ("1K",       "Meia (21K)"):      "⚠️ Baixa precisão",
-        ("1K",       "Maratona (42K)"): "⚠️ Baixa precisão",
-        ("5K",       "5K"):              "✅ Alta precisão",
-        ("5K",       "10K"):             "✅ Alta precisão",
-        ("5K",       "Meia (21K)"):      "🟡 Boa estimativa",
-        ("5K",       "Maratona (42K)"): "⚠️ Estimativa",
-        ("10K",      "5K"):              "✅ Alta precisão",
-        ("10K",      "10K"):             "✅ Alta precisão",
-        ("10K",      "Meia (21K)"):      "✅ Alta precisão",
-        ("10K",      "Maratona (42K)"): "🟡 Boa estimativa",
-        ("Meia",     "5K"):              "🟡 Boa estimativa",
-        ("Meia",     "10K"):             "✅ Alta precisão",
-        ("Meia",     "Meia (21K)"):      "✅ Alta precisão",
-        ("Meia",     "Maratona (42K)"): "✅ Alta precisão",
-        ("Maratona", "5K"):              "🟡 Boa estimativa",
-        ("Maratona", "10K"):             "✅ Alta precisão",
-        ("Maratona", "Meia (21K)"):      "✅ Alta precisão",
-        ("Maratona", "Maratona (42K)"): "✅ Alta precisão",
+        ("1K",   "5K"):             "🟡 Boa estimativa",
+        ("1K",   "10K"):            "⚠️ Estimativa",
+        ("1K",   "Meia (21K)"):     "⚠️ Baixa precisão",
+        ("1K",   "Maratona (42K)"): "⚠️ Baixa precisão",
+        ("5K",   "10K"):            "✅ Alta precisão",
+        ("5K",   "Meia (21K)"):     "🟡 Boa estimativa",
+        ("5K",   "Maratona (42K)"): "⚠️ Estimativa",
+        ("10K",  "Meia (21K)"):     "✅ Alta precisão",
+        ("10K",  "Maratona (42K)"): "🟡 Boa estimativa",
+        ("Meia", "Maratona (42K)"): "✅ Alta precisão",
     }
+
+    def _base_para_prever(d2_alvo):
+        """Retorna a maior base disponível que seja menor que d2_alvo.
+        Garante que estamos sempre PREVENDO para cima, nunca trivialmente."""
+        menores = [(n, t, d) for n, t, d in _bases_disp if d < d2_alvo * 0.85]
+        if menores:
+            return max(menores, key=lambda x: x[2])  # maior das menores
+        return None  # sem base válida para prever
 
     if not _bases_disp:
         st.info("Nenhum best effort disponível. Rode com o Strava ativo para registrar "
                 "esforços em distâncias padrão (1K, 5K, 10K…).")
     else:
-        def _melhor_base_para(d2):
-            """Base cujo d1 mais se aproxima de d2 (menor distância absoluta)."""
-            return min(_bases_disp, key=lambda x: abs(x[2] - d2))
-
-        # 4 cards — cada um com sua própria base mais próxima
         _cols = st.columns(4)
         for _i, (_label, _d2) in enumerate(_alvos):
-            _bn, _t1, _d1 = _melhor_base_para(_d2)
-            _t2        = _riegel(_t1, _d1, _d2)
-            _conf      = _CONF.get((_bn, _label), "🟡 Estimativa")
-            _pace_pred = (_t2 / _d2) if _t2 else None
+            _base = _base_para_prever(_d2)
             with _cols[_i]:
-                st.metric(f"🏁 {_label}", _fmt_time(_t2),
-                          f"{fmt_pace(_pace_pred)}/km" if _pace_pred else "")
-                st.caption(f"{_conf} · base {_bn}")
-
-        # Gráfico comparativo: todas as bases × todas as distâncias alvo
-        if len(_bases_disp) >= 2:
-            st.markdown("##### Comparativo entre bases de referência")
-            _DIST_COLORS = [BLUE, GREEN, AMBER, RED]
-            fig_rie = go.Figure()
-            _all_pace_sec = []
-            for _idx, (_label, _d2) in enumerate(_alvos):
-                _paces, _texts = [], []
-                for _bname, _bt, _bd in _bases_disp:
-                    _t2c = _riegel(_bt, _bd, _d2)
-                    _pc  = (_t2c / _d2) if _t2c else None
-                    _paces.append(_pc / 60 if _pc else None)
-                    _texts.append(fmt_pace(_pc) if _pc else "—")
-                    if _pc: _all_pace_sec.append(_pc)
-                fig_rie.add_bar(
-                    name=_label,
-                    x=[b[0] for b in _bases_disp],
-                    y=_paces,
-                    text=_texts,
-                    textposition="outside",
-                    marker_color=_DIST_COLORS[_idx % len(_DIST_COLORS)],
-                )
-            set_pace_yaxis(fig_rie, pd.Series(_all_pace_sec))
-            fig_rie.update_layout(
-                barmode="group",
-                title="Pace previsto por distância alvo × base de referência",
-                xaxis_title="Base de referência",
-                legend=dict(orientation="h", y=-0.18),
-                height=340,
-            )
-            st.plotly_chart(fig_rie, use_container_width=True, key="fig_riegel_comp")
-            st.caption(
-                "Barras próximas entre si = consistência entre distâncias. "
-                "Base curta muito mais otimista que base longa = perfil de velocista — "
-                "invista em volume aeróbico para melhorar as provas longas."
-            )
-
+                if _base is None:
+                    st.metric(f"🏁 {_label}", "—")
+                    st.caption("Sem base disponível")
+                else:
+                    _bn, _t1, _d1 = _base
+                    _t2       = _riegel(_t1, _d1, _d2)
+                    _conf     = _CONF.get((_bn, _label), "🟡 Estimativa")
+                    _pace_p   = (_t2 / _d2) if _t2 else None
+                    st.metric(
+                        f"🏁 {_label}",
+                        _fmt_time(_t2),
+                        f"{fmt_pace(_pace_p)}/km" if _pace_p else "",
+                    )
+                    st.caption(f"{_conf} · base {_bn} ({_fmt_time(_t1)})")
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  8 · VOLUME E EVOLUÇÃO
