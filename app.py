@@ -2448,7 +2448,6 @@ with tab_mapa:
                             "<table class='kmt2'><thead><tr>"
                             "<th style='width:36px'>Km</th>"
                             "<th style='width:78px'>Pace</th>"
-                            "<th style='width:52px'>Δ média</th>"
                             "<th style='width:105px'>↑ subida</th>"
                             "<th style='width:62px'>↓ descida</th>"
                             "<th style='width:68px'>Alt. média</th>"
