@@ -7,6 +7,7 @@ ao activities_consolidated.csv já existente, sem alterar nenhum outro dado.
 Uso:
     python backfill_polylines.py --token SEU_ACCESS_TOKEN
     python backfill_polylines.py --token SEU_ACCESS_TOKEN --full   # inclui polyline HD
+    python backfill_polylines.py --token SEU_ACCESS_TOKEN --altitude  # altitude GPS
     python backfill_polylines.py --token SEU_ACCESS_TOKEN --base data/namorada/processed
 """
 
@@ -49,6 +50,21 @@ def safe_get(url, headers, params=None, retries=3):
             if attempt < retries:
                 time.sleep(2 ** attempt)
     return None
+
+
+def fix_coord(val):
+    """Corrige latitude/longitude gravados com pontos extras (-28.455.058... → -28.455058...)."""
+    s = str(val).strip()
+    if s in ("nan", "None", ""):
+        return None
+    if s.count(".") > 1:
+        neg    = s.startswith("-")
+        digits = s.lstrip("-").replace(".", "")
+        s      = ("-" if neg else "") + digits[:2] + "." + digits[2:]
+    try:
+        return float(s)
+    except Exception:
+        return None
 
 
 # ── Busca summary_polyline via endpoint de lista (barato: 200/página) ──────────
@@ -148,13 +164,14 @@ def fetch_altitude_streams(access_token, activity_ids, batch_size=95):
     print(f"  ✅ {len([v for v in results.values() if v])} altitude streams obtidos.\n")
     return results
 
+
 # ── Main ───────────────────────────────────────────────────────────────────────
 def main():
     parser = argparse.ArgumentParser(description="Backfill de polylines no activities_consolidated.csv")
-    parser.add_argument("--token", required=True,  help="Strava access token")
-    parser.add_argument("--base",  default=DEFAULT_BASE, help="Pasta base dos CSVs (default: data/processed)")
-    parser.add_argument("--full",  action="store_true",  help="Busca também map_polyline HD (1 req/atividade)")
-    parser.add_argument("--altitude", action="store_true", help="Busca altitude GPS stream (1 req/atividade)")
+    parser.add_argument("--token",    required=True,       help="Strava access token")
+    parser.add_argument("--base",     default=DEFAULT_BASE, help="Pasta base dos CSVs (default: data/processed)")
+    parser.add_argument("--full",     action="store_true",  help="Busca também map_polyline HD (1 req/atividade)")
+    parser.add_argument("--altitude", action="store_true",  help="Busca altitude GPS stream (1 req/atividade)")
     args = parser.parse_args()
 
     csv_path = os.path.join(args.base, CSV_NAME)
@@ -162,9 +179,16 @@ def main():
         print(f"❌ CSV não encontrado: {csv_path}")
         return
 
-    # Carrega CSV existente
+    # ── Carrega CSV existente ──────────────────────────────────────────────────
     df = pd.read_csv(csv_path, sep=";", encoding="utf-8-sig")
     print(f"📂 CSV carregado: {len(df)} atividades em '{csv_path}'")
+
+    # ── Corrige latitude/longitude corrompidos ─────────────────────────────────
+    if "latitude" in df.columns and "longitude" in df.columns:
+        df["latitude"]  = df["latitude"].apply(fix_coord)
+        df["longitude"] = df["longitude"].apply(fix_coord)
+        validas = df["latitude"].notna().sum()
+        print(f"  ✅ Coordenadas corrigidas: {validas}/{len(df)} válidas")
 
     # ── summary_polyline (sempre) ──────────────────────────────────────────────
     already_has_summary = (
@@ -202,30 +226,33 @@ def main():
         print(f"\n🔍 {len(ids_sem)} atividades sem map_polyline HD.")
         if ids_sem:
             full_map = fetch_full_polylines(args.token, ids_sem)
-            df.loc[df["id"].isin(ids_sem), "map_polyline"] = df.loc[
-                df["id"].isin(ids_sem), "id"
-            ].map(full_map)
+            df.loc[df["id"].isin(ids_sem), "map_polyline"] = (
+                df.loc[df["id"].isin(ids_sem), "id"].map(full_map)
+            )
             preen_hd = (df["map_polyline"].astype(str).str.len() > 2).sum()
             print(f"  ✅ map_polyline HD: {preen_hd}/{len(df)} atividades.")
 
-    # ── altitude stream (opcional, --altitude) ────────────────────────────────
+    # ── altitude stream (opcional, --altitude) ─────────────────────────────────
     if args.altitude:
         if "altitude_stream" not in df.columns:
             df["altitude_stream"] = ""
+
         ids_sem_alt = df.loc[
             df["altitude_stream"].isna() | (df["altitude_stream"].astype(str).str.len() <= 2),
             "id"
         ].tolist()
+
         print(f"\n🔍 {len(ids_sem_alt)} atividades sem altitude stream.")
         if ids_sem_alt:
             alt_map = fetch_altitude_streams(args.token, ids_sem_alt)
-            df.loc[df["id"].isin(ids_sem_alt), "altitude_stream"] = \
+            df.loc[df["id"].isin(ids_sem_alt), "altitude_stream"] = (
                 df.loc[df["id"].isin(ids_sem_alt), "id"].map(alt_map)
+            )
             preen_alt = (df["altitude_stream"].astype(str).str.len() > 2).sum()
             print(f"  ✅ altitude_stream: {preen_alt}/{len(df)} atividades.")
 
     # ── Salva CSV ──────────────────────────────────────────────────────────────
-    df.to_csv(csv_path, sep=";", encoding="utf-8-sig", index=False)
+    df.to_csv(csv_path, sep=";", encoding="utf-8-sig", index=False, decimal=".")
     print(f"\n💾 CSV salvo: {csv_path}")
     print("🎉 Backfill concluído! Reinicie o Streamlit para ver as rotas no mapa.")
 
