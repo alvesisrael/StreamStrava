@@ -120,12 +120,41 @@ def fetch_full_polylines(access_token, activity_ids, batch_size=95):
     return results
 
 
+def fetch_altitude_streams(access_token, activity_ids, batch_size=95):
+    import json
+    headers = {"Authorization": f"Bearer {access_token}"}
+    results = {}
+    total   = len(activity_ids)
+    print(f"\n📥 Buscando altitude stream para {total} atividades...")
+
+    for i, aid in enumerate(activity_ids, start=1):
+        url = f"https://www.strava.com/api/v3/activities/{aid}/streams"
+        r   = safe_get(url, headers, params={"keys": "altitude", "key_by_type": True})
+        if r:
+            alt = r.json().get("altitude", {}).get("data", [])
+            results[aid] = json.dumps(alt[::3]) if alt else ""
+        else:
+            results[aid] = ""
+
+        if i % 10 == 0:
+            print(f"  → {i}/{total} processadas")
+
+        if i % batch_size == 0 and i < total:
+            print(f"  ⏸️  Pausa 15min ({i}/{total})...")
+            for rem in range(900, 0, -60):
+                print(f"     ⏱️  {rem}s restantes...")
+                time.sleep(min(60, rem))
+
+    print(f"  ✅ {len([v for v in results.values() if v])} altitude streams obtidos.\n")
+    return results
+
 # ── Main ───────────────────────────────────────────────────────────────────────
 def main():
     parser = argparse.ArgumentParser(description="Backfill de polylines no activities_consolidated.csv")
     parser.add_argument("--token", required=True,  help="Strava access token")
     parser.add_argument("--base",  default=DEFAULT_BASE, help="Pasta base dos CSVs (default: data/processed)")
     parser.add_argument("--full",  action="store_true",  help="Busca também map_polyline HD (1 req/atividade)")
+    parser.add_argument("--altitude", action="store_true", help="Busca altitude GPS stream (1 req/atividade)")
     args = parser.parse_args()
 
     csv_path = os.path.join(args.base, CSV_NAME)
@@ -178,6 +207,8 @@ def main():
             ].map(full_map)
             preen_hd = (df["map_polyline"].astype(str).str.len() > 2).sum()
             print(f"  ✅ map_polyline HD: {preen_hd}/{len(df)} atividades.")
+            
+    df.to_csv(csv_path, sep=";", encoding="utf-8-sig", index=False)
 
     # ── Salva CSV ──────────────────────────────────────────────────────────────
     df.to_csv(csv_path, sep=";", encoding="utf-8-sig", index=False)
