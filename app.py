@@ -1715,7 +1715,8 @@ with tab_mapa:
                 _frag = st.fragment
             except AttributeError:
                 def _frag(f): return f
-
+            _expandir = st.checkbox("🔍 Expandir mapa", value=False, key="expand_map")
+            _map_h_outer = 720 if _expandir else 520
             @_frag
             def _render_folium():
                 _MODES = [
@@ -1972,8 +1973,7 @@ with tab_mapa:
                 )
                 m.get_root().html.add_child(folium.Element(legend_html))
 
-                _map_h = st.select_slider("Altura do mapa", options=[350,450,500,600,700,800], value=500, help="Arrasta para expandir o mapa")
-                st_folium(m, use_container_width=True, height=_map_h, returned_objects=[])
+                st_folium(m, use_container_width=True, height=_map_h_outer, returned_objects=[])
                 _hint = "Clique numa rota para detalhes" if _poly_snap else "Tamanho = distância"
                 st.caption(
                     _hint + " · Ative/desative rotas no controle (canto superior direito) · "
