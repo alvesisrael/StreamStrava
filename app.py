@@ -2293,8 +2293,6 @@ with tab_mapa:
                     else:
                         st.caption("⚠️ Altitude estimada pelos laps (stream não disponível)")
 
-                    st.plotly_chart(fig_elv, use_container_width=True)
-
                     # ── Tabela analítica por km ──────────────────────────────
                     laps_tbl = (
                         lps_run[lps_run["activity_id"] == r_elv["id"]]
