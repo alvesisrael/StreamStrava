@@ -1847,11 +1847,11 @@ with tab_mapa:
                             if _ant:
                                 AntPath(r["coords"], color=r["color_hex"], weight=4.5,
                                         dash_array=[12, 20], delay=800, opacity=0.92,
-                                        popup=pop).add_to(fg)
+                                        popup=folium.Popup(_popup(r), max_width=220)).add_to(fg)
                             else:
                                 folium.PolyLine(r["coords"], color=r["color_hex"],
                                                weight=4.5, opacity=0.9,
-                                               popup=pop).add_to(fg)
+                                               popup=folium.Popup(_popup(r), max_width=220)).add_to(fg)
                         else:
                             coords_all = r["coords"]
                             n_pts = len(coords_all) - 1
