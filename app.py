@@ -1206,7 +1206,7 @@ with tab_metas:
                     hovertemplate="<b>%{x}</b><br>Melhor pace: %{customdata[0]}/km<extra></extra>")
                 set_pace_yaxis(fig, be_ev_m["Pace"])
                 fig.update_layout(xaxis_tickangle=-45)
-                st.plotly_chart(fig, width="stretch")
+                st.plotly_chart(fig, use_container_width=True, key="fig_be_evolucao")
 
         with col_b:
             pr_df = be[be["pr_rank"].notna()]
@@ -1217,13 +1217,13 @@ with tab_metas:
                              title="🏅 PRs Conquistados por Distância",
                              color_discrete_sequence=[AMBER], text_auto=True)
                 fig.update_layout(showlegend=False)
-                st.plotly_chart(fig, width="stretch")
+                st.plotly_chart(fig, use_container_width=True, key="fig_prs")
 
     df_meta = (df_run.groupby(["MesAnoOrd","MesAno"])
                      .agg(KM=("distance_km","sum"), Treinos=("id","count"))
                      .reset_index().sort_values("MesAnoOrd").tail(12))
-    df_meta["PctKM"]     = (df_meta["KM"] / 150 * 100).clip(upper=120)
-    df_meta["PctTreinos"]= (df_meta["Treinos"] / 16 * 100).clip(upper=120)
+    df_meta["PctKM"]      = (df_meta["KM"] / 150 * 100).clip(upper=120)
+    df_meta["PctTreinos"] = (df_meta["Treinos"] / 16 * 100).clip(upper=120)
 
     fig = go.Figure()
     fig.add_bar(x=df_meta["MesAno"], y=df_meta["PctKM"],
@@ -1236,7 +1236,139 @@ with tab_metas:
     fig.add_hline(y=100, line_dash="dash", line_color=AMBER, annotation_text="Meta 100%")
     fig.update_layout(barmode="group", title="📊 % Metas Mensais — últimos 12 meses",
                       yaxis_title="%", xaxis_tickangle=-45)
-    st.plotly_chart(fig, width="stretch")
+    st.plotly_chart(fig, use_container_width=True, key="fig_metas_mensais")
+
+    # ── Previsões de Prova — Fórmula de Riegel ───────────────────────────────
+    st.markdown("---")
+    st.subheader("🔮 Previsões de Prova")
+    st.caption(
+        "Fórmula de Riegel: **T₂ = T₁ × (D₂/D₁)^1.06** — mesma base usada pelo Strava. "
+        "Quanto mais próxima a distância de referência da distância alvo, mais precisa a estimativa."
+    )
+
+    def _riegel(t1, d1, d2):
+        if not t1 or t1 <= 0 or d1 <= 0: return None
+        return t1 * (d2 / d1) ** 1.06
+
+    def _fmt_time(sec):
+        if sec is None or sec <= 0: return "—"
+        s = int(sec)
+        h, rem = divmod(s, 3600)
+        m, ss  = divmod(rem, 60)
+        return f"{h}h{m:02d}m{ss:02d}s" if h > 0 else f"{m}:{ss:02d}"
+
+    def _best_sec(dist_label):
+        if be_raw.empty: return None
+        s = be_raw[be_raw["name"].str.lower() == dist_label.lower()]
+        if s.empty: return None
+        best_pace = s["pace_sec_km"].min()
+        if pd.isna(best_pace): return None
+        dist_map = {"1k": 1.0, "5k": 5.0, "10k": 10.0,
+                    "half-marathon": 21.097, "marathon": 42.195}
+        km = dist_map.get(dist_label.lower())
+        return best_pace * km if km else None
+
+    _bases = {
+        "1K":      (_best_sec("1k"),             1.0),
+        "5K":      (_best_sec("5k"),             5.0),
+        "10K":     (_best_sec("10k"),           10.0),
+        "Meia":    (_best_sec("half-marathon"), 21.097),
+        "Maratona":(_best_sec("marathon"),      42.195),
+    }
+    _alvos = [("5K", 5.0), ("10K", 10.0), ("Meia (21K)", 21.097), ("Maratona (42K)", 42.195)]
+    _base_opts = {k: v for k, v in _bases.items() if v[0] is not None}
+
+    if not _base_opts:
+        st.info("Nenhum best effort disponível. Rode com o Strava ativo para registrar "
+                "esforços em distâncias padrão (1K, 5K, 10K…).")
+    else:
+        _CONF = {
+            ("1K",       "5K"):              "⚠️ Estimativa grossa",
+            ("1K",       "10K"):             "⚠️ Estimativa grossa",
+            ("1K",       "Meia (21K)"):      "⚠️ Baixa precisão",
+            ("1K",       "Maratona (42K)"): "⚠️ Baixa precisão",
+            ("5K",       "5K"):              "✅ Alta precisão",
+            ("5K",       "10K"):             "✅ Alta precisão",
+            ("5K",       "Meia (21K)"):      "🟡 Boa estimativa",
+            ("5K",       "Maratona (42K)"): "⚠️ Estimativa",
+            ("10K",      "5K"):              "✅ Alta precisão",
+            ("10K",      "10K"):             "✅ Alta precisão",
+            ("10K",      "Meia (21K)"):      "✅ Alta precisão",
+            ("10K",      "Maratona (42K)"): "🟡 Boa estimativa",
+            ("Meia",     "5K"):              "🟡 Boa estimativa",
+            ("Meia",     "10K"):             "✅ Alta precisão",
+            ("Meia",     "Meia (21K)"):      "✅ Alta precisão",
+            ("Meia",     "Maratona (42K)"): "✅ Alta precisão",
+            ("Maratona", "5K"):              "🟡 Boa estimativa",
+            ("Maratona", "10K"):             "✅ Alta precisão",
+            ("Maratona", "Meia (21K)"):      "✅ Alta precisão",
+            ("Maratona", "Maratona (42K)"): "✅ Alta precisão",
+        }
+
+        _base_sel = st.selectbox(
+            "Distância de referência",
+            list(_base_opts.keys()),
+            index=min(1, len(_base_opts) - 1),
+            help="Usa seu melhor tempo nessa distância para prever as demais.",
+            key="riegel_base"
+        )
+        _t1, _d1 = _base_opts[_base_sel]
+
+        _cols = st.columns(4)
+        for _i, (_label, _d2) in enumerate(_alvos):
+            _t2   = _riegel(_t1, _d1, _d2)
+            _conf = _CONF.get((_base_sel, _label), "🟡 Estimativa")
+            _pace_pred = (_t2 / _d2) if _t2 else None
+            with _cols[_i]:
+                st.metric(
+                    f"🏁 {_label}",
+                    _fmt_time(_t2),
+                    f"{fmt_pace(_pace_pred)}/km" if _pace_pred else "",
+                )
+                st.caption(_conf)
+
+        st.markdown("##### Comparativo entre bases de referência")
+        _alvo_sel = st.selectbox(
+            "Ver previsões para",
+            [a[0] for a in _alvos],
+            key="riegel_alvo"
+        )
+        _d2_sel = dict(_alvos)[_alvo_sel]
+
+        _comp_rows = []
+        for _bn, (_bt, _bd) in _base_opts.items():
+            _t2c = _riegel(_bt, _bd, _d2_sel)
+            if _t2c:
+                _comp_rows.append({
+                    "Base": _bn,
+                    "Tempo": _fmt_time(_t2c),
+                    "Pace":  fmt_pace(_t2c / _d2_sel) + "/km",
+                    "pace_min": (_t2c / _d2_sel) / 60,
+                    "pace_sec": _t2c / _d2_sel,
+                })
+
+        if _comp_rows:
+            _comp_df = pd.DataFrame(_comp_rows).sort_values("pace_min")
+            fig_rie = go.Figure()
+            fig_rie.add_bar(
+                x=_comp_df["Base"],
+                y=_comp_df["pace_min"],
+                text=_comp_df["Pace"],
+                textposition="outside",
+                marker_color=PURPLE,
+            )
+            set_pace_yaxis(fig_rie, _comp_df["pace_sec"])
+            fig_rie.update_layout(
+                title=f"Pace previsto para {_alvo_sel} por distância de referência",
+                showlegend=False,
+                height=300,
+            )
+            st.plotly_chart(fig_rie, use_container_width=True, key="fig_riegel_comp")
+            st.caption(
+                "Barras próximas entre si = consistência entre distâncias. "
+                "Base curta muito mais otimista que base longa = perfil de velocista — "
+                "invista em volume aeróbico para melhorar as provas longas."
+            )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
