@@ -157,6 +157,10 @@ def transform_activities(raw_activities):
         "weather_wind_gusts",
         "weather_code",
         "weather_condition",
+        "map_summary_polyline",   
+        "map_polyline",           
+        "altitude_stream",        
+
     ]
 
     # Mantém apenas as colunas que existirem no df

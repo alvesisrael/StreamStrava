@@ -50,7 +50,8 @@ def save_processed_snapshot(df, prefix="activities"):
         index=False,
         sep=";",
         encoding="utf-8-sig",
-        date_format="%d/%m/%Y %H:%M:%S"
+        date_format="%d/%m/%Y %H:%M:%S",
+        decimal="."
     )
  
     print(f"📦 Snapshot salvo em: {filename}")
@@ -104,7 +105,8 @@ def save_processed_data(df):
         index=False,
         sep=";",
         encoding="utf-8-sig",
-        date_format="%d/%m/%Y %H:%M:%S"
+        date_format="%d/%m/%Y %H:%M:%S",
+        decimal="."
     )
 
     print(f"💾 Base consolidada atualizada: {CONSOLIDATED_PATH}")
