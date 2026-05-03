@@ -1972,9 +1972,7 @@ with tab_mapa:
                 )
                 m.get_root().html.add_child(folium.Element(legend_html))
 
-                _map_h = st.select_slider(
-                    "Altura do mapa", options=[350,450,550,650,800], value=500,
-                    help="Arrasta para expandir o mapa")
+                _map_h = st.select_slider("Altura do mapa", options=[350,450,500,600,700,800], value=500, help="Arrasta para expandir o mapa")
                 st_folium(m, use_container_width=True, height=_map_h, returned_objects=[])
                 _hint = "Clique numa rota para detalhes" if _poly_snap else "Tamanho = distância"
                 st.caption(
