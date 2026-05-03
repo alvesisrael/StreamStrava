@@ -1278,7 +1278,7 @@ with tab_metas:
     ]
     _bases_disp = [(n, t, d) for n, t, d in _bases if t]
 
-    _alvos = [("5K", 5.0), ("10K", 10.0), ("Meia (21K)", 21.097), ("Maratona (42K)", 42.195)]
+    _alvos = [("10K", 10.0), ("Meia (21K)", 21.097), ("Maratona (42K)", 42.195)]
 
     _CONF = {
         ("1K",   "5K"):             "🟡 Boa estimativa",
@@ -1305,7 +1305,7 @@ with tab_metas:
         st.info("Nenhum best effort disponível. Rode com o Strava ativo para registrar "
                 "esforços em distâncias padrão (1K, 5K, 10K…).")
     else:
-        _cols = st.columns(4)
+        _cols = st.columns(3)
         for _i, (_label, _d2) in enumerate(_alvos):
             _base = _base_para_prever(_d2)
             with _cols[_i]:
