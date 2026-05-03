@@ -2257,15 +2257,18 @@ with tab_mapa:
                     fig_elv.add_scatter(
                         x=dist_acum,
                         y=alts_elv,
-                        mode="lines",
-                        line=dict(
+                        mode="lines+markers",
+                        line=dict(color="#E74C3C", width=2),
+                        marker=dict(
+                            size=4,
                             color=alts_elv,
                             colorscale=[[0,"#27AE60"],[0.5,"#F1C40F"],[1,"#E74C3C"]],
-                            width=3,
+                            showscale=False,
                         ),
                         showlegend=False,
                         hovertemplate="Km %{x:.2f}<br>Altitude: %{y:.0f}m<extra></extra>",
                     )
+
                     # Marca o ponto mais alto
                     fig_elv.add_scatter(
                         x=[dist_acum[idx_max]],
