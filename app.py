@@ -2293,6 +2293,183 @@ with tab_mapa:
                     else:
                         st.caption("⚠️ Altitude estimada pelos laps (stream não disponível)")
 
+                    st.plotly_chart(fig_elv, use_container_width=True)
+
+                    # ── Tabela analítica por km ──────────────────────────────
+                    laps_tbl = (
+                        lps_run[lps_run["activity_id"] == r_elv["id"]]
+                        .sort_values("lap_index")
+                        if not lps_run.empty else pd.DataFrame()
+                    )
+                    _avg_ps_tbl = float(laps_tbl["pace_sec_km"].mean()) \
+                        if not laps_tbl.empty and laps_tbl["pace_sec_km"].notna().any() else 0.0
+                    _avg_fc_tbl = float(laps_tbl["average_heartrate"].mean()) \
+                        if not laps_tbl.empty and laps_tbl["average_heartrate"].notna().any() else 0.0
+
+                    def _fz(fc):
+                        if fc<=0: return "—"
+                        if fc<137: return "Z1"
+                        if fc<165: return "Z2"
+                        if fc<175: return "Z3"
+                        if fc<185: return "Z4"
+                        return "Z5"
+
+                    def _fhex(fc):
+                        if fc<=0: return "#888"
+                        if fc<137: return "#3498DB"
+                        if fc<165: return "#2ECC71"
+                        if fc<175: return "#F39C12"
+                        if fc<185: return "#E67E22"
+                        return "#E74C3C"
+
+                    def _ramp(t):
+                        return "rgb({},{},{})".format(
+                            round(46+t*185), round(204-t*128), round(113-t*53))
+
+                    # Constrói linhas por km
+                    _km_rows = []
+                    _cum_g   = 0.0
+                    _total_d = dist_acum[-1]
+
+                    for _ki in range(1, int(_total_d) + 2):
+                        _ks = float(_ki - 1)
+                        _ke = min(float(_ki), _total_d)
+                        if _ks >= _total_d - 0.05:
+                            break
+                        _i0 = next((i for i,d in enumerate(dist_acum) if d >= _ks), 0)
+                        _i1 = next((i for i,d in enumerate(dist_acum) if d >= _ke), len(dist_acum)-1)
+                        _seg = alts_elv[_i0:_i1+1]
+                        if not _seg:
+                            continue
+                        _g = sum(max(0.0, _seg[j+1]-_seg[j]) for j in range(len(_seg)-1))
+                        _l = sum(max(0.0, _seg[j]-_seg[j+1]) for j in range(len(_seg)-1))
+                        _a = sum(_seg)/len(_seg)
+                        _cum_g += _g
+
+                        if not laps_tbl.empty and (_ki-1) < len(laps_tbl):
+                            _lp = laps_tbl.iloc[_ki-1]
+                            _ps = float(_lp.get("pace_sec_km") or 0)
+                            _fc = float(_lp.get("average_heartrate") or 0)
+                        else:
+                            _ps, _fc = 0.0, 0.0
+
+                        _km_rows.append({"km":_ki,"ps":_ps,"g":_g,"l":_l,
+                                         "a":_a,"cg":_cum_g,"fc":_fc})
+
+                    if _km_rows:
+                        _ps_vals = [r["ps"] for r in _km_rows if r["ps"]>0]
+                        _ps_min  = min(_ps_vals) if _ps_vals else 240
+                        _ps_max  = max(_ps_vals) if _ps_vals else 420
+                        _ps_avg  = sum(_ps_vals)/len(_ps_vals) if _ps_vals else 300
+                        _gmax    = max(r["g"] for r in _km_rows) or 1.0
+
+                        _rows_html = ""
+                        for _r in _km_rows:
+                            _t_p = min(1.0, max(0.0, (_r["ps"]-_ps_min)/max(1,_ps_max-_ps_min)))
+                            _t_g = min(1.0, _r["g"]/_gmax)
+                            _pc  = _ramp(_t_p) if _r["ps"]>0 else "#555"
+                            _gc  = _ramp(_t_g)
+                            _fcc = _fhex(_r["fc"])
+                            _bar = round(min(60, _r["g"]/_gmax*60))
+                            _pf  = fmt_pace(_r["ps"]) if _r["ps"]>0 else "—"
+                            _fcs = f"{_r['fc']:.0f}" if _r["fc"]>0 else "—"
+                            _dlt = int(_r["ps"]-_ps_avg) if _r["ps"]>0 else 0
+                            _dc  = "#E74C3C" if _dlt>0 else "#2ECC71"
+                            _ds  = "+" if _dlt>0 else ""
+                            _rows_html += (
+                                "<tr>"
+                                f"<td>{_r['km']}</td>"
+                                f"<td><span style='display:inline-block;padding:2px 9px;border-radius:100px;"
+                                f"background:{_pc}22;color:{_pc};font-size:11px;font-weight:500'>{_pf}</span></td>"
+                                f"<td style='font-size:10px;color:{_dc}'>{_ds}{_dlt}s</td>"
+                                f"<td><div style='display:flex;align-items:center;gap:5px'>"
+                                f"<div style='width:{_bar}px;height:4px;min-width:2px;background:{_gc};"
+                                f"border-radius:2px;flex-shrink:0'></div>"
+                                f"<span style='color:{_gc};font-size:11px;font-weight:500'>+{_r['g']:.0f}m</span>"
+                                f"</div></td>"
+                                f"<td style='font-size:11px'>-{_r['l']:.0f}m</td>"
+                                f"<td style='font-size:11px'>{_r['a']:.0f}m</td>"
+                                f"<td style='font-size:11px'>{_r['cg']:.0f}m</td>"
+                                f"<td><span style='display:inline-block;padding:1px 7px;border-radius:100px;"
+                                f"background:{_fcc}22;color:{_fcc};font-size:11px;font-weight:500'>"
+                                f"{_fcs} <span style='font-size:10px;opacity:.7'>{_fz(_r['fc'])}</span>"
+                                f"</span></td>"
+                                "</tr>"
+                            )
+
+                        # Linha de totais/médias
+                        _tg2  = sum(r["g"] for r in _km_rows)
+                        _tl2  = sum(r["l"] for r in _km_rows)
+                        _fc2  = sum(r["fc"] for r in _km_rows if r["fc"]>0) / max(1, sum(1 for r in _km_rows if r["fc"]>0))
+                        _fca  = _fhex(_fc2)
+                        _rows_html += (
+                            "<tr style='background:rgba(128,128,128,.06)'>"
+                            "<td style='font-size:10px;font-weight:500'>Média/Total</td>"
+                            f"<td><span style='display:inline-block;padding:2px 9px;border-radius:100px;"
+                            f"border:0.5px solid rgba(128,128,128,.3);font-size:11px'>{fmt_pace(_ps_avg)}</span></td>"
+                            "<td></td>"
+                            f"<td style='font-size:11px;font-weight:500'>+{_tg2:.0f}m</td>"
+                            f"<td style='font-size:11px'>-{_tl2:.0f}m</td>"
+                            "<td></td><td></td>"
+                            f"<td><span style='display:inline-block;padding:1px 7px;border-radius:100px;"
+                            f"background:{_fca}22;color:{_fca};font-size:11px;font-weight:500'>"
+                            f"{_fc2:.0f} <span style='font-size:10px;opacity:.7'>{_fz(_fc2)}</span>"
+                            f"</span></td>"
+                            "</tr>"
+                        )
+
+                        _legend = (
+                            "<div style='display:flex;gap:14px;flex-wrap:wrap;font-size:11px;"
+                            "color:var(--color-text-secondary,#888);margin-top:8px'>"
+                            + "".join(
+                                f"<span style='display:flex;align-items:center;gap:4px'>"
+                                f"<span style='width:7px;height:7px;border-radius:50%;background:{c};"
+                                f"display:inline-block'></span>{t}</span>"
+                                for t,c in [
+                                    ("Rápido","#2ECC71"),("Lento","#E74C3C"),
+                                    ("Z1 <137bpm","#3498DB"),("Z2 <165","#2ECC71"),
+                                    ("Z3 <175","#F39C12"),("Z4 <185","#E67E22"),
+                                    ("Z5 ≥185","#E74C3C"),
+                                ]
+                            )
+                            + "</div>"
+                        )
+
+                        _tbl_html = (
+                            "<style>.kmt2{width:100%;border-collapse:collapse;font-size:12px;"
+                            "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;table-layout:fixed}"
+                            ".kmt2 th{font-size:10px;font-weight:500;color:var(--color-text-secondary,#888);"
+                            "text-transform:uppercase;letter-spacing:.5px;padding:7px 8px;"
+                            "border-bottom:0.5px solid rgba(128,128,128,.2);text-align:center;white-space:nowrap}"
+                            ".kmt2 th:first-child{text-align:left}"
+                            ".kmt2 td{padding:5px 8px;border-bottom:0.5px solid rgba(128,128,128,.08);"
+                            "color:var(--color-text-secondary,#aaa);vertical-align:middle}"
+                            ".kmt2 td:first-child{text-align:left;font-size:11px;font-weight:500}"
+                            ".kmt2 td:not(:first-child){text-align:center}"
+                            ".kmt2 tr:hover td{background:rgba(128,128,128,.04)}</style>"
+                            "<table class='kmt2'><thead><tr>"
+                            "<th style='width:36px'>Km</th>"
+                            "<th style='width:78px'>Pace</th>"
+                            "<th style='width:52px'>Δ média</th>"
+                            "<th style='width:105px'>↑ subida</th>"
+                            "<th style='width:62px'>↓ descida</th>"
+                            "<th style='width:68px'>Alt. média</th>"
+                            "<th style='width:62px'>↑ acum.</th>"
+                            "<th style='width:78px'>FC</th>"
+                            "</tr></thead>"
+                            f"<tbody>{_rows_html}</tbody></table>"
+                            + _legend
+                        )
+
+                        st.markdown("##### 📊 Análise por km")
+                        st.markdown(_tbl_html, unsafe_allow_html=True)
+
+                    if _usou_stream:
+                        st.caption("✅ Altitude real do GPS")
+                    else:
+                        st.caption("⚠️ Altitude estimada pelos laps (stream não disponível)")
+                    
+                    
         
         
         
