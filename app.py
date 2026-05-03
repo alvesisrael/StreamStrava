@@ -2460,7 +2460,7 @@ with tab_mapa:
                         st.markdown(_tbl_html, unsafe_allow_html=True)
 
                     if _usou_stream:
-                        st.caption("✅ Altitude real do GPS")
+                        st.caption("")
                     else:
                         st.caption("⚠️ Altitude estimada pelos laps (stream não disponível)")
                     
