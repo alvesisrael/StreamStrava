@@ -443,6 +443,10 @@ st.sidebar.caption(
     f"Z1 < {_z1} · Z2 {_z1}–{_z2} · "
     f"Z3 {_z2}–{_z3} · Z4 {_z3}–{_z4} · Z5 ≥ {_z4}"
 )
+# ── Recalcula Zona FC com FCmax personalizado (fora do cache) ──────────
+if not laps_raw.empty:
+    laps_raw = laps_raw.copy()
+    laps_raw["Zona FC"] = laps_raw["average_heartrate"].apply(zona_fc)
 
 s_dt = pd.Timestamp(date_range[0]) if len(date_range) >= 1 else pd.Timestamp(min_d)
 e_dt = (pd.Timestamp(date_range[1]) + pd.Timedelta(hours=23, minutes=59, seconds=59)) \
