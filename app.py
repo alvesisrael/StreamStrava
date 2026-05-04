@@ -1986,10 +1986,15 @@ with tab_mapa:
                     "color:rgba(255,255,255,.85)'>"
                     "<div style='width:16px;height:4px;background:" + c + ";"
                     "border-radius:2px'></div>" + z + "</div>"
-                    for z, c in [("Z1 <137bpm","#3498DB"),("Z2 <165","#2ECC71"),
-                                  ("Z3 <175","#F39C12"),("Z4 <185","#E67E22"),
-                                  ("Z5 ≥185","#E74C3C")]
+                    for z, c in [
+                        (f"Z1 <{round(FC_MAX*0.70)}bpm", "#3498DB"),
+                        (f"Z2 <{round(FC_MAX*0.80)}",    "#2ECC71"),
+                        (f"Z3 <{round(FC_MAX*0.87)}",    "#F39C12"),
+                        (f"Z4 <{round(FC_MAX*0.93)}",    "#E67E22"),
+                        (f"Z5 ≥{round(FC_MAX*0.93)}",    "#E74C3C"),
+                    ]
                 )
+
                 _li_elev = (
                     "<div style='display:flex;align-items:center;gap:5px;"
                     "color:rgba(255,255,255,.8)'><span>plano</span>"
