@@ -96,12 +96,14 @@ def set_pace_yaxis(fig, pace_sec_series, step_sec=30):
     )
     return fig
 
+FC_MAX = 195  # ← padrão. O sidebar sobrescreve com o valor real do usuário
+
 def zona_fc(hr):
     if pd.isna(hr): return "Sem FC"
-    if hr < 137:    return "Z1 - Regenerativo"
-    if hr < 165:    return "Z2 - Aeróbico"
-    if hr < 175:    return "Z3 - Tempo"
-    if hr < 185:    return "Z4 - Limiar"
+    if hr < FC_MAX * 0.70: return "Z1 - Regenerativo"
+    if hr < FC_MAX * 0.80: return "Z2 - Aeróbico"
+    if hr < FC_MAX * 0.87: return "Z3 - Tempo"
+    if hr < FC_MAX * 0.93: return "Z4 - Limiar"
     return "Z5 - VO2max"
 
 KEYWORDS_INTENSIDADE = {
@@ -288,14 +290,14 @@ def compute_main_laps_pace(laps_group):
     return float((laps["pace_sec_km"] * laps["distance_km"]).sum() / total_dist)
 
 def fc_to_hex(fc_bpm):
-    """FC em bpm → cor por zona cardíaca (azul Z1 → vermelho Z5)."""
     if pd.isna(fc_bpm) or float(fc_bpm) <= 0: return "#3498DB"
     fc = float(fc_bpm)
-    if fc < 137: return "#3498DB"
-    if fc < 165: return "#2ECC71"
-    if fc < 175: return "#F39C12"
-    if fc < 185: return "#E67E22"
+    if fc < FC_MAX * 0.70: return "#3498DB"
+    if fc < FC_MAX * 0.80: return "#2ECC71"
+    if fc < FC_MAX * 0.87: return "#F39C12"
+    if fc < FC_MAX * 0.93: return "#E67E22"
     return "#E74C3C"
+
 
 def elev_gain_to_hex(elev_m_per_km):
     """Elevação m/km → cor: verde (plano) → vermelho (morro, >45m/km)."""
@@ -343,7 +345,7 @@ def load_all(base):
         laps["start_date"] = normalize_dt(laps["start_date"])
         laps["MesAno"]     = mesano_pt(laps["start_date"])
         laps["MesAnoOrd"]  = laps["start_date"].dt.to_period("M").apply(lambda x: x.ordinal)
-        laps["Zona FC"]    = laps["average_heartrate"].apply(zona_fc)
+        #laps["Zona FC"]    = laps["average_heartrate"].apply(zona_fc) deletar mudamos a FC
 
     be = read("activity_best_efforts_consolidated.csv")
     if not be.empty:
@@ -423,6 +425,24 @@ int_opts = [i for i in INTENSITY_ORDER
             if int_col in df_raw.columns
             and i in df_raw[int_col].dropna().unique()]
 sel_int  = st.sidebar.multiselect("Filtrar Intensidade", int_opts, default=int_opts)
+
+st.sidebar.markdown("---")
+FC_MAX = st.sidebar.number_input(
+    "❤️ FC Máxima pessoal (bpm)",
+    min_value=150, max_value=230,
+    value=st.session_state.get("fc_max_val", 195),
+    step=1,
+    key="fc_max_val",
+    help="Sua FC máxima registrada. Define os limites de cada zona cardíaca."
+)
+_z1 = round(FC_MAX * 0.70)
+_z2 = round(FC_MAX * 0.80)
+_z3 = round(FC_MAX * 0.87)
+_z4 = round(FC_MAX * 0.93)
+st.sidebar.caption(
+    f"Z1 < {_z1} · Z2 {_z1}–{_z2} · "
+    f"Z3 {_z2}–{_z3} · Z4 {_z3}–{_z4} · Z5 ≥ {_z4}"
+)
 
 s_dt = pd.Timestamp(date_range[0]) if len(date_range) >= 1 else pd.Timestamp(min_d)
 e_dt = (pd.Timestamp(date_range[1]) + pd.Timedelta(hours=23, minutes=59, seconds=59)) \
