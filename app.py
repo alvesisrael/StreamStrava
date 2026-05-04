@@ -1335,8 +1335,8 @@ with tab_coach:
     hoje  = pd.Timestamp.now()
     # Semana do calendário actual (segunda a domingo)
     _inicio_semana = (hoje - timedelta(days=hoje.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
-    ult7  = df_run[df_run["start_date"] >= _inicio_semana]
-    ult28 = df_run[df_run["start_date"] >= hoje - timedelta(days=28)]
+    ult7  = _runs_raw[_runs_raw["start_date"] >= _inicio_semana]
+    ult28 = _runs_raw[_runs_raw["start_date"] >= hoje - timedelta(days=28)]
 
     carga_aguda   = ult7["suffer_score"].sum()  if "suffer_score" in df_run.columns else 0
     carga_cronica = ult28["suffer_score"].sum() / 4 if "suffer_score" in df_run.columns else 0
