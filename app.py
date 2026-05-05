@@ -1617,6 +1617,38 @@ with tab_mapa:
                     ["Claro","Escuro","Topográfico","Satélite","Topo ESRI","Voyager"],
                     horizontal=True)
 
+                # ── helpers de km ─────────────────────────────────────────────
+                def _hav_seg(c1, c2):
+                    la1, lo1 = math.radians(c1[0]), math.radians(c1[1])
+                    la2, lo2 = math.radians(c2[0]), math.radians(c2[1])
+                    d = math.sin((la2-la1)/2)**2 + math.cos(la1)*math.cos(la2)*math.sin((lo2-lo1)/2)**2
+                    return 2*6371*math.asin(math.sqrt(d))
+
+                def _slice_coords(coords, km_ini, km_fim):
+                    cum, buf, dentro = 0.0, [], False
+                    for i, pt in enumerate(coords):
+                        if i > 0:
+                            cum += _hav_seg(coords[i-1], pt)
+                        if cum >= km_ini and not dentro:
+                            dentro = True
+                            if i > 0:
+                                buf.append(coords[i-1])
+                        if dentro:
+                            buf.append(pt)
+                        if cum >= km_fim:
+                            break
+                    return buf if len(buf) >= 2 else coords
+
+                # ── slider de trecho ──────────────────────────────────────────
+                _km_max = max((r["km"] for r in _routes_snap), default=10.0)
+                km_ini, km_fim = st.slider(
+                    "Trecho visível",
+                    min_value=0.0, max_value=float(math.ceil(_km_max)),
+                    value=(0.0, float(math.ceil(_km_max))),
+                    step=0.1, format="%.1f km",
+                    key="km_slicer"
+                )
+
                 ESRI_SAT_URL  = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
                 ESRI_SAT_ATTR = "Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community"
                 ESRI_TOPO_URL  = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}"
@@ -1721,7 +1753,7 @@ with tab_mapa:
                     _fg_name = r["date"] + " — " + r["name"][:20] + " (" + str(r["km"]) + "km)"
                     fg = folium.FeatureGroup(name=_fg_name, show=True)
                     if _poly_snap and r["coords"]:
-                        coords_all = r["coords"]
+                        coords_all = _slice_coords(r["coords"], km_ini, km_fim)  # ← ALTERADO
                         n_pts = len(coords_all) - 1
                         act_laps = (_lps_snap[_lps_snap["activity_id"] == r["id"]]
                                     .sort_values("lap_index")
@@ -1729,11 +1761,11 @@ with tab_mapa:
                         if mode_map == "Intensidade":
                             if _ant:
                                 from folium.plugins import AntPath
-                                AntPath(r["coords"], color=r["color_hex"], weight=4.5,
+                                AntPath(coords_all, color=r["color_hex"], weight=4.5,
                                         dash_array=[12,20], delay=800, opacity=0.92,
                                         popup=folium.Popup(_popup(r), max_width=220)).add_to(fg)
                             else:
-                                folium.PolyLine(r["coords"], color=r["color_hex"], weight=4.5,
+                                folium.PolyLine(coords_all, color=r["color_hex"], weight=4.5,
                                                opacity=0.9,
                                                popup=folium.Popup(_popup(r), max_width=220)).add_to(fg)
                         else:
@@ -1838,328 +1870,6 @@ with tab_mapa:
                 st.caption(_hint + " · Ative/desative rotas no controle (canto superior direito)"
                            + (" · Animação AntPath ativa" if _ant else ""))
             _render_folium()
-
-        # ── Comparativo de pace por lap ───────────────────────────────────────
-        st.markdown("---")
-        st.subheader("🏃 Comparativo de pace por lap")
-        if lps_run.empty:
-            st.info("Dados de laps não disponíveis.")
-        else:
-            run_opts = {f"{r['date']} — {r['name'][:22]} ({r['km']}km)": r for r in routes}
-            sel_runs = st.multiselect(
-                "Selecione corridas para comparar (ate 5)",
-                list(run_opts.keys()),
-                default=list(run_opts.keys())[:min(3, len(run_opts))],
-                max_selections=5)
-            fig_cmp = go.Figure()
-            all_paces_cmp = []
-            _DIST_COLS = ["#E74C3C","#3498DB","#2ECC71","#9B59B6","#F39C12"]
-            for idx_r, label in enumerate(sel_runs):
-                r = run_opts[label]
-                laps_r = (lps_run[lps_run["activity_id"] == r["id"]]
-                          .sort_values("lap_index"))
-                laps_r = laps_r[laps_r["pace_sec_km"].notna() &
-                                (laps_r["pace_sec_km"] > 0) &
-                                (laps_r["pace_sec_km"] < 600)]
-                if laps_r.empty: continue
-                all_paces_cmp.extend(laps_r["pace_sec_km"].tolist())
-                laps_r = laps_r.copy()
-                laps_r["pace_min"] = laps_r["pace_sec_km"] / 60
-                laps_r["pace_fmt"] = fmt_pace_vec(laps_r["pace_sec_km"])
-                _col = _DIST_COLS[idx_r % len(_DIST_COLS)]
-                fig_cmp.add_trace(go.Scatter(
-                    x=laps_r["lap_index"], y=laps_r["pace_min"],
-                    name=label[:38], mode="lines+markers",
-                    line=dict(color=_col, width=2.5), marker=dict(size=6, color=_col),
-                    customdata=laps_r["pace_fmt"],
-                    hovertemplate="Km %{x}<br>Pace: %{customdata}/km<extra></extra>"))
-            if fig_cmp.data and all_paces_cmp:
-                pace_series = pd.Series([p for p in all_paces_cmp if 0 < p < 600])
-                set_pace_yaxis(fig_cmp, pace_series)
-                fig_cmp.update_layout(
-                    title="Pace por lap — evolucao durante a corrida",
-                    xaxis_title="Lap (km)",
-                    legend=dict(orientation="h", y=-0.18, font=dict(size=11)),
-                    hovermode="x unified")
-                st.plotly_chart(fig_cmp, width="stretch")
-                st.caption("Eixo Y invertido — mais alto = mais rapido.")
-            elif sel_runs:
-                st.info("Dados de laps não encontrados para as corridas selecionadas.")
-
-        # ── Perfil de elevação ────────────────────────────────────────────────
-        if poly_col and not lps_run.empty:
-            st.markdown("---")
-            st.subheader("⛰️ Perfil de Elevação na Rota")
-            _opts_elv = [r["date"]+" — "+r["name"]+" ("+str(r["km"])+"km)" for r in routes]
-            sel_elv = st.selectbox("Selecione uma corrida para ver o perfil",
-                                   options=_opts_elv, key="sel_elv") if _opts_elv else None
-            if sel_elv:
-                r_elv = next((r for r in routes
-                              if r["date"]+" — "+r["name"]+" ("+str(r["km"])+"km)" == sel_elv), None)
-                if r_elv and r_elv["coords"]:
-                    coords_elv = r_elv["coords"]
-                    n_elv      = len(coords_elv)
-                    _usou_stream = False
-                    alt_stream_raw = df_map[df_map["id"] == r_elv["id"]]["altitude_stream"].values \
-                                     if "altitude_stream" in df_map.columns else []
-                    alts_elv = []
-                    if (len(alt_stream_raw) > 0
-                            and str(alt_stream_raw[0]) not in ("nan","None","")
-                            and len(str(alt_stream_raw[0])) > 4):
-                        try:
-                            alts_raw = ast.literal_eval(str(alt_stream_raw[0]))
-                            alts_elv = np.interp(
-                                np.linspace(0,1,n_elv),
-                                np.linspace(0,1,len(alts_raw)),
-                                alts_raw).tolist()
-                            _usou_stream = True
-                        except Exception:
-                            pass
-                    if not _usou_stream:
-                        laps_elv = lps_run[lps_run["activity_id"] == r_elv["id"]].sort_values("lap_index")
-                        alts_elv = [0.0] * n_elv
-                        if not laps_elv.empty:
-                            n_pts_elv    = n_elv - 1
-                            total_km_elv = laps_elv["distance_km"].sum()
-                            cum_alt, cum_frac = 0.0, 0.0
-                            for _, lap in laps_elv.iterrows():
-                                frac = float(lap["distance_km"])/total_km_elv if total_km_elv > 0 else 1/len(laps_elv)
-                                gain = float(lap.get("total_elevation_gain") or 0)
-                                i0 = int(cum_frac * n_pts_elv)
-                                i1 = min(n_pts_elv, int((cum_frac+frac)*n_pts_elv)+1)
-                                for i in range(i0, i1+1):
-                                    progress = (i-i0)/max(1, i1-i0)
-                                    alts_elv[i] = cum_alt + gain * progress
-                                cum_alt  += gain
-                                cum_frac += frac
-
-                    alt_min_v = min(alts_elv)
-                    alt_max_v = max(alts_elv)
-
-                    if HAS_FOLIUM:
-                        lat_c_elv = float(np.mean([c[0] for c in coords_elv]))
-                        lng_c_elv = float(np.mean([c[1] for c in coords_elv]))
-                        ESRI_SAT_URL2  = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
-                        ESRI_SAT_ATTR2 = "Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community"
-                        tile_elv = st.radio("Mapa base do perfil",
-                            ["Satélite","Topo ESRI","Topográfico"], horizontal=True, key="tile_elv")
-                        m_elv = folium.Map(location=[lat_c_elv, lng_c_elv], zoom_start=14, tiles=None)
-                        if tile_elv == "Satélite":
-                            folium.TileLayer(ESRI_SAT_URL2, attr=ESRI_SAT_ATTR2, name="Satélite").add_to(m_elv)
-                        elif tile_elv == "Topo ESRI":
-                            folium.TileLayer(
-                                "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",
-                                attr="Esri", name="Topo ESRI").add_to(m_elv)
-                        else:
-                            folium.TileLayer("OpenTopoMap", name="Topográfico").add_to(m_elv)
-
-                        alt_range_v = (alt_max_v - alt_min_v) or 1
-                        for i in range(len(coords_elv)-1):
-                            t = (alts_elv[i] - alt_min_v) / alt_range_v
-                            seg_color = "#{:02X}{:02X}{:02X}".format(
-                                round(46+t*185), round(204-t*128), round(113-t*53))
-                            folium.PolyLine([coords_elv[i], coords_elv[i+1]],
-                                           color=seg_color, weight=5, opacity=0.92,
-                                           tooltip=f"{alts_elv[i]:.0f}m").add_to(m_elv)
-                        folium.CircleMarker(coords_elv[0], radius=7, color="#27AE60",
-                                           fill=True, fill_opacity=1,
-                                           tooltip=f"Início · {alts_elv[0]:.0f}m").add_to(m_elv)
-                        folium.CircleMarker(coords_elv[-1], radius=7, color="#E74C3C",
-                                           fill=True, fill_opacity=1,
-                                           tooltip=f"Fim · {alts_elv[-1]:.0f}m").add_to(m_elv)
-                        idx_max = int(np.argmax(alts_elv))
-                        folium.Marker(coords_elv[idx_max], icon=folium.DivIcon(
-                            html=f'<div style="font-size:11px;font-weight:700;color:#fff;'
-                                 f'background:#E74C3C;padding:2px 7px;border-radius:10px;'
-                                 f'box-shadow:0 1px 4px rgba(0,0,0,.6)">▲ {alts_elv[idx_max]:.0f}m</div>',
-                            icon_size=(80,22), icon_anchor=(40,11)),
-                            tooltip=f"Ponto mais alto: {alts_elv[idx_max]:.0f}m").add_to(m_elv)
-                        m_elv.get_root().html.add_child(folium.Element(
-                            "<div style='position:absolute;bottom:36px;right:52px;z-index:9999;"
-                            "background:rgba(10,10,10,0.75);padding:9px 13px;border-radius:10px;"
-                            "font-size:12px;color:#fff'>"
-                            "<div style='font-weight:600;margin-bottom:6px'>Altitude</div>"
-                            "<div style='display:flex;align-items:center;gap:6px'>"
-                            "<div style='width:60px;height:6px;border-radius:3px;"
-                            "background:linear-gradient(to right,#2ECC71,#F1C40F,#E74C3C)'></div></div>"
-                            f"<div style='display:flex;justify-content:space-between;width:60px;"
-                            f"font-size:10px;margin-top:2px'>"
-                            f"<span>{alt_min_v:.0f}m</span><span>{alt_max_v:.0f}m</span></div></div>"))
-                        gain_total = sum(max(0, alts_elv[i+1]-alts_elv[i]) for i in range(len(alts_elv)-1))
-                        loss_total = sum(max(0, alts_elv[i]-alts_elv[i+1]) for i in range(len(alts_elv)-1))
-                        ce1,ce2,ce3,ce4 = st.columns(4)
-                        ce1.metric("▲ Ponto mais alto",   f"{alt_max_v:.0f} m")
-                        ce2.metric("▼ Ponto mais baixo",  f"{alt_min_v:.0f} m")
-                        ce3.metric("↑ Subida acumulada",  f"{gain_total:.0f} m")
-                        ce4.metric("↓ Descida acumulada", f"{loss_total:.0f} m")
-                        st_folium(m_elv, use_container_width=True, height=480, returned_objects=[])
-                        st.caption(("✅ Altitude real do GPS · " if _usou_stream else "⚠️ Altitude estimada pelos laps · ")
-                                   + "Verde = baixo · Vermelho = alto")
-
-                    # Perfil 2D
-                    st.markdown("##### 📈 Perfil de elevação")
-                    def _hav_dist(c1, c2):
-                        la1,lo1 = math.radians(c1[0]), math.radians(c1[1])
-                        la2,lo2 = math.radians(c2[0]), math.radians(c2[1])
-                        d = math.sin((la2-la1)/2)**2+math.cos(la1)*math.cos(la2)*math.sin((lo2-lo1)/2)**2
-                        return 2*6371*math.asin(math.sqrt(d))
-                    dist_acum = [0.0]
-                    for i in range(1, len(coords_elv)):
-                        dist_acum.append(dist_acum[-1] + _hav_dist(coords_elv[i-1], coords_elv[i]))
-                    fig_elv = go.Figure()
-                    fig_elv.add_scatter(x=dist_acum, y=alts_elv, mode="lines",
-                                        fill="tozeroy", line=dict(width=0),
-                                        fillcolor="rgba(231,76,60,0.15)", showlegend=False, hoverinfo="skip")
-                    fig_elv.add_scatter(x=dist_acum, y=alts_elv, mode="lines+markers",
-                                        line=dict(color="#E74C3C", width=2),
-                                        marker=dict(size=4, color=alts_elv,
-                                                    colorscale=[[0,"#27AE60"],[0.5,"#F1C40F"],[1,"#E74C3C"]],
-                                                    showscale=False),
-                                        showlegend=False,
-                                        hovertemplate="Km %{x:.2f}<br>Altitude: %{y:.0f}m<extra></extra>")
-                    fig_elv.add_scatter(x=[dist_acum[idx_max]], y=[alts_elv[idx_max]],
-                                        mode="markers+text",
-                                        marker=dict(size=10, color="#E74C3C"),
-                                        text=[f"▲ {alts_elv[idx_max]:.0f}m"],
-                                        textposition="top center", showlegend=False)
-                    fig_elv.update_layout(xaxis_title="Distância (km)", yaxis_title="Altitude (m)",
-                                          height=220, margin=dict(l=0,r=0,t=10,b=40),
-                                          plot_bgcolor="rgba(0,0,0,0)")
-                    st.plotly_chart(fig_elv, use_container_width=True)
-
-                    # Tabela analítica por km
-                    laps_tbl = (lps_run[lps_run["activity_id"] == r_elv["id"]].sort_values("lap_index")
-                                if not lps_run.empty else pd.DataFrame())
-                    _avg_ps_tbl = float(laps_tbl["pace_sec_km"].mean()) \
-                        if not laps_tbl.empty and laps_tbl["pace_sec_km"].notna().any() else 0.0
-
-                    def _fz(fc):
-                        if fc<=0: return "—"
-                        if fc<137: return "Z1"
-                        if fc<165: return "Z2"
-                        if fc<175: return "Z3"
-                        if fc<185: return "Z4"
-                        return "Z5"
-                    def _fhex(fc):
-                        if fc<=0: return "#888"
-                        if fc<137: return "#3498DB"
-                        if fc<165: return "#2ECC71"
-                        if fc<175: return "#F39C12"
-                        if fc<185: return "#E67E22"
-                        return "#E74C3C"
-                    def _ramp(t):
-                        return "rgb({},{},{})".format(
-                            round(46+t*185), round(204-t*128), round(113-t*53))
-
-                    _km_rows = []
-                    _cum_g   = 0.0
-                    _total_d = dist_acum[-1]
-                    for _ki in range(1, int(_total_d)+2):
-                        _ks = float(_ki-1); _ke = min(float(_ki), _total_d)
-                        if _ks >= _total_d - 0.05: break
-                        _i0 = next((i for i,d in enumerate(dist_acum) if d>=_ks), 0)
-                        _i1 = next((i for i,d in enumerate(dist_acum) if d>=_ke), len(dist_acum)-1)
-                        _seg = alts_elv[_i0:_i1+1]
-                        if not _seg: continue
-                        _g = sum(max(0.0, _seg[j+1]-_seg[j]) for j in range(len(_seg)-1))
-                        _l = sum(max(0.0, _seg[j]-_seg[j+1]) for j in range(len(_seg)-1))
-                        _a = sum(_seg)/len(_seg)
-                        _cum_g += _g
-                        if not laps_tbl.empty and (_ki-1) < len(laps_tbl):
-                            _lp = laps_tbl.iloc[_ki-1]
-                            _ps = float(_lp.get("pace_sec_km") or 0)
-                            _fc = float(_lp.get("average_heartrate") or 0)
-                        else:
-                            _ps, _fc = 0.0, 0.0
-                        _km_rows.append({"km":_ki,"ps":_ps,"g":_g,"l":_l,"a":_a,"cg":_cum_g,"fc":_fc})
-
-                    if _km_rows:
-                        _ps_vals = [r["ps"] for r in _km_rows if r["ps"]>0]
-                        _ps_min  = min(_ps_vals) if _ps_vals else 240
-                        _ps_max  = max(_ps_vals) if _ps_vals else 420
-                        _ps_avg  = sum(_ps_vals)/len(_ps_vals) if _ps_vals else 300
-                        _gmax    = max(r["g"] for r in _km_rows) or 1.0
-                        _rows_html = ""
-                        for _r in _km_rows:
-                            _t_p = min(1.0, max(0.0, (_r["ps"]-_ps_min)/max(1,_ps_max-_ps_min)))
-                            _t_g = min(1.0, _r["g"]/_gmax)
-                            _pc  = _ramp(_t_p) if _r["ps"]>0 else "#555"
-                            _gc  = _ramp(_t_g)
-                            _fcc = _fhex(_r["fc"])
-                            _bar = round(min(60, _r["g"]/_gmax*60))
-                            _pf  = fmt_pace(_r["ps"]) if _r["ps"]>0 else "—"
-                            _fcs = f"{_r['fc']:.0f}" if _r["fc"]>0 else "—"
-                            _rows_html += (
-                                "<tr>"
-                                f"<td>{_r['km']}</td>"
-                                f"<td><span style='display:inline-block;padding:2px 9px;border-radius:100px;"
-                                f"background:{_pc}22;color:{_pc};font-size:11px;font-weight:500'>{_pf}</span></td>"
-                                f"<td><div style='display:flex;align-items:center;gap:5px'>"
-                                f"<div style='width:{_bar}px;height:4px;min-width:2px;background:{_gc};"
-                                f"border-radius:2px;flex-shrink:0'></div>"
-                                f"<span style='color:{_gc};font-size:11px;font-weight:500'>+{_r['g']:.0f}m</span>"
-                                f"</div></td>"
-                                f"<td style='font-size:11px'>-{_r['l']:.0f}m</td>"
-                                f"<td style='font-size:11px'>{_r['a']:.0f}m</td>"
-                                f"<td style='font-size:11px'>{_r['cg']:.0f}m</td>"
-                                f"<td><span style='display:inline-block;padding:1px 7px;border-radius:100px;"
-                                f"background:{_fcc}22;color:{_fcc};font-size:11px;font-weight:500'>"
-                                f"{_fcs} <span style='font-size:10px;opacity:.7'>{_fz(_r['fc'])}</span>"
-                                f"</span></td>"
-                                "</tr>")
-                        _tg2 = sum(r["g"] for r in _km_rows)
-                        _tl2 = sum(r["l"] for r in _km_rows)
-                        _fc2 = sum(r["fc"] for r in _km_rows if r["fc"]>0) / max(1, sum(1 for r in _km_rows if r["fc"]>0))
-                        _fca = _fhex(_fc2)
-                        _rows_html += (
-                            "<tr style='background:rgba(128,128,128,.06)'>"
-                            "<td style='font-size:10px;font-weight:500'>Média/Total</td>"
-                            f"<td><span style='display:inline-block;padding:2px 9px;border-radius:100px;"
-                            f"border:0.5px solid rgba(128,128,128,.3);font-size:11px'>{fmt_pace(_ps_avg)}</span></td>"
-                            f"<td style='font-size:11px;font-weight:500'>+{_tg2:.0f}m</td>"
-                            f"<td style='font-size:11px'>-{_tl2:.0f}m</td>"
-                            "<td></td><td></td>"
-                            f"<td><span style='display:inline-block;padding:1px 7px;border-radius:100px;"
-                            f"background:{_fca}22;color:{_fca};font-size:11px;font-weight:500'>"
-                            f"{_fc2:.0f} <span style='font-size:10px;opacity:.7'>{_fz(_fc2)}</span>"
-                            f"</span></td></tr>")
-                        _legend = (
-                            "<div style='display:flex;gap:14px;flex-wrap:wrap;font-size:11px;"
-                            "color:var(--color-text-secondary,#888);margin-top:8px'>"
-                            + "".join(
-                                f"<span style='display:flex;align-items:center;gap:4px'>"
-                                f"<span style='width:7px;height:7px;border-radius:50%;background:{c};"
-                                f"display:inline-block'></span>{t}</span>"
-                                for t,c in [("Rápido","#2ECC71"),("Lento","#E74C3C"),
-                                            ("Z1 <137bpm","#3498DB"),("Z2 <165","#2ECC71"),
-                                            ("Z3 <175","#F39C12"),("Z4 <185","#E67E22"),("Z5 ≥185","#E74C3C")])
-                            + "</div>")
-                        st.markdown("##### 📊 Análise por km")
-                        st.markdown(
-                            "<style>.kmt2{width:100%;border-collapse:collapse;font-size:12px;"
-                            "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;table-layout:fixed}"
-                            ".kmt2 th{font-size:10px;font-weight:500;color:var(--color-text-secondary,#888);"
-                            "text-transform:uppercase;letter-spacing:.5px;padding:7px 8px;"
-                            "border-bottom:0.5px solid rgba(128,128,128,.2);text-align:center;white-space:nowrap}"
-                            ".kmt2 th:first-child{text-align:left}"
-                            ".kmt2 td{padding:5px 8px;border-bottom:0.5px solid rgba(128,128,128,.08);"
-                            "color:var(--color-text-secondary,#aaa);vertical-align:middle}"
-                            ".kmt2 td:first-child{text-align:left;font-size:11px;font-weight:500}"
-                            ".kmt2 td:not(:first-child){text-align:center}"
-                            ".kmt2 tr:hover td{background:rgba(128,128,128,.04)}</style>"
-                            "<table class='kmt2'><thead><tr>"
-                            "<th style='width:36px'>Km</th>"
-                            "<th style='width:78px'>Pace</th>"
-                            "<th style='width:105px'>↑ subida</th>"
-                            "<th style='width:62px'>↓ descida</th>"
-                            "<th style='width:68px'>Alt. média</th>"
-                            "<th style='width:62px'>↑ acum.</th>"
-                            "<th style='width:78px'>FC</th>"
-                            "</tr></thead>"
-                            f"<tbody>{_rows_html}</tbody></table>" + _legend,
-                            unsafe_allow_html=True)
-                    st.caption("" if _usou_stream else "⚠️ Altitude estimada pelos laps (stream não disponível)")
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  11 · HISTÓRICO
