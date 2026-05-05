@@ -1482,10 +1482,12 @@ with tab_coach:
                 ca1,ca2,ca3 = st.columns(3)
                 ca1.metric("Pace Z2 — início", ae_m["PaceZ2_fmt"].iloc[0]  + "/km")
                 ca2.metric("Pace Z2 — atual",  ae_m["PaceZ2_fmt"].iloc[-1] + "/km")
-                ca3.metric("Ganho aeróbico",   f"{abs(delta_ae):.0f}s/km",
-                           f"+{delta_ae:.0f}s/km mais rápido na mesma FC" if delta_ae > 0
-                           else "Ainda sem melhora",
-                           delta_color="normal" if delta_ae > 0 else "inverse")
+                ca3.metric(
+                    "Ganho aeróbico" if delta_ae > 0 else "Variação aeróbica",
+                    f"{'+' if delta_ae > 0 else '-'}{abs(delta_ae):.0f}s/km",
+                    f"+{delta_ae:.0f}s/km mais rápido na mesma FC" if delta_ae > 0 else f"Regressão de {abs(delta_ae):.0f}s/km",
+                    delta_color="normal" if delta_ae > 0 else "inverse"
+                )
                 fig_ae = go.Figure()
                 fig_ae.add_scatter(
                     x=ae_m["MesAno"], y=ae_m["PaceZ2_min"],
