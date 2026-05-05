@@ -1606,8 +1606,7 @@ with tab_mapa:
             except AttributeError:
                 def _frag(f): return f
 
-            _expandir  = st.checkbox("🔍 Expandir mapa", value=False, key="expand_map")
-            _map_h_outer = 720 if _expandir else 520
+            
 
             @_frag
             def _render_folium():
@@ -1865,6 +1864,10 @@ with tab_mapa:
                     "font-size:12px;color:rgba(255,255,255,.9)'>"
                     "<div style='font-weight:600;margin-bottom:5px'>" + leg_title + "</div>"
                     + leg_items + "</div>"))
+                
+                _expandir    = st.checkbox("🔍 Expandir mapa", value=False, key="expand_map")
+                _map_h_outer = 720 if _expandir else 520
+                
                 st_folium(m, use_container_width=True, height=_map_h_outer, returned_objects=[])
                 _hint = "Clique numa rota para detalhes" if _poly_snap else "Tamanho = distância"
                 st.caption(_hint + " · Ative/desative rotas no controle (canto superior direito)"
