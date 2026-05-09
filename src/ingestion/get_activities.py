@@ -366,13 +366,8 @@ def get_all_enriched_activities(
     best_efforts_all = checkpoint["best_efforts"]
     processed_ids    = set(checkpoint["processed_ids"])
 
-    activities = get_activities(
-        access_token,
-        after=after,
-        enriched=enriched,
-        processed_ids=list(processed_ids),
-    )
-    print(f"\n🏃 {len(activities)} atividades encontradas na API.\n")
+    activities = get_activities(access_token, after=after, enriched=enriched, processed_ids=list(processed_ids))
+    print(f"\n{len(activities)} atividades encontradas na API.\n")
 
     for i, activity in enumerate(activities):
         activity_id = activity.get("id")
@@ -384,25 +379,13 @@ def get_all_enriched_activities(
         detail, streams, laps = None, None, None
 
         if fetch_details:
-            detail = get_activity_detail(
-                access_token, activity_id,
-                enriched=enriched, processed_ids=list(processed_ids),
-                laps=laps_all, best_efforts=best_efforts_all,
-            )
+            detail = get_activity_detail(access_token, activity_id, enriched=enriched, processed_ids=list(processed_ids), laps=laps_all, best_efforts=best_efforts_all)
 
         if fetch_streams:
-            streams = get_activity_streams(
-                access_token, activity_id,
-                enriched=enriched, processed_ids=list(processed_ids),
-                laps=laps_all, best_efforts=best_efforts_all,
-            )
+            streams = get_activity_streams( access_token, activity_id, enriched=enriched, processed_ids=list(processed_ids), laps=laps_all, best_efforts=best_efforts_all)
 
         if fetch_laps:
-            laps = get_activity_laps(
-                access_token, activity_id,
-                enriched=enriched, processed_ids=list(processed_ids),
-                laps=laps_all, best_efforts=best_efforts_all,
-            )
+            laps = get_activity_laps(access_token, activity_id, enriched=enriched, processed_ids=list(processed_ids), laps=laps_all, best_efforts=best_efforts_all)
 
         # Extrações
         record = extract_fields(activity, detail=detail, streams=streams)

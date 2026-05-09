@@ -1,12 +1,8 @@
-"""
-PerformanceRun — Streamlit Dashboard  (versão otimizada)
-"""
 import re
 import ast
 import math
 import datetime as _dt
 from datetime import timedelta
-
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -25,8 +21,7 @@ try:
 except ImportError:
     HAS_FOLIUM = False
 
-st.set_page_config(page_title="PerformanceRun 🏃", page_icon="🏃",
-                   layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="PerformanceRun 🏃", page_icon="🏃", layout="wide", initial_sidebar_state="collapsed")
 
 st.markdown("""<style>
 @media (max-width: 768px) {
@@ -66,11 +61,8 @@ ZONA_ORDER = ["Sem FC","Z1 - Regenerativo","Z2 - Aeróbico",
 GREEN, BLUE, AMBER, RED, PURPLE, GRAY = \
     "#2ECC71","#3498DB","#F39C12","#E74C3C","#9B59B6","#95A5A6"
 
-MESES_PT = {"Jan":"jan","Feb":"fev","Mar":"mar","Apr":"abr","May":"mai",
-            "Jun":"jun","Jul":"jul","Aug":"ago","Sep":"set","Oct":"out",
-            "Nov":"nov","Dec":"dez"}
-DIAS_PT  = {"Monday":"Seg","Tuesday":"Ter","Wednesday":"Qua",
-            "Thursday":"Qui","Friday":"Sex","Saturday":"Sáb","Sunday":"Dom"}
+MESES_PT = {"Jan":"jan","Feb":"fev","Mar":"mar","Apr":"abr","May":"mai","Jun":"jun","Jul":"jul","Aug":"ago","Sep":"set","Oct":"out","Nov":"nov","Dec":"dez"}
+DIAS_PT  = {"Monday":"Seg","Tuesday":"Ter","Wednesday":"Qua","Thursday":"Qui","Friday":"Sex","Saturday":"Sáb","Sunday":"Dom"}
 DIAS_ORDER_PT = ["Seg","Ter","Qua","Qui","Sex","Sáb","Dom"]
 
 # Zonas fáceis — usado em calc_intensidade_fc (módulo-level, não recriado por chamada)
@@ -80,21 +72,17 @@ _ZONAS_FACEIS_REL = {"Z1", "Z2", "Sem FC"}
 FC_MAX = 195
 
 KEYWORDS_INTENSIDADE = {
-    "Muito Forte": ["intervalad","tiro","interval","vo2","muito forte",
-                    "repetição","repeticao","série","serie","prova","teste"],
-    "Forte":       ["fartlek","forte","threshold","limiar"],
+    "Muito Forte": ["intervalad","tiro","vo2","muito forte","prova","teste"],
+    "Forte":       ["fartlek","forte","limiar"],
     "Moderado Firme": ["progressiv","ritmado","moderado firme","tempo run"],
     "Moderado":    ["longo","moderado","moder","base","contínuo","continuo",
                     "aeróbic","aerobic"],
     "Leve":        ["regenerat","fácil","facil","easy","recovery",
-                    "leve","caminhad","walk","solto"],
+                    "leve","caminhad","walk","solto","leve"],
 }
 
 # ── Regex pré-compilados (uma vez no startup, reutilizados em cada chamada) ───
-_KW_COMPILED: dict[str, re.Pattern] = {
-    intensity: re.compile(
-        "|".join(re.escape(kw) for kw in kws), re.IGNORECASE
-    )
+_KW_COMPILED: dict[str, re.Pattern] = {intensity: re.compile("|".join(re.escape(kw) for kw in kws), re.IGNORECASE)
     for intensity, kws in KEYWORDS_INTENSIDADE.items()
 }
 
@@ -115,11 +103,11 @@ def fmt_pace(sec):
     return f"{s // 60}:{s % 60:02d}"
 
 def fmt_pace_vec(sec_series: pd.Series) -> pd.Series:
-    """Vetorizado: ~5x mais rápido que .apply(fmt_pace) em Series grandes."""
     arr  = sec_series.to_numpy(dtype=float)
     inv  = np.isnan(arr) | (arr <= 0)
     mins = np.where(inv, 0, arr // 60).astype(int)
     secs = np.where(inv, 0, arr %  60).astype(int)
+
     # constrói strings via list comprehension (evita overhead de .apply por célula)
     out  = [f"{m}:{s:02d}" if not i else "—" for m, s, i in zip(mins, secs, inv)]
     return pd.Series(out, index=sec_series.index)
@@ -128,12 +116,8 @@ def set_pace_yaxis(fig, pace_sec_series, step_sec=30):
     mn = max(0, int(pace_sec_series.min()) - step_sec)
     mx = int(pace_sec_series.max()) + step_sec
     vals = list(range(mn - mn % step_sec, mx + step_sec, step_sec))
-    fig.update_yaxes(
-        autorange="reversed",
-        tickvals=[v / 60 for v in vals],
-        ticktext=[fmt_pace(v) for v in vals],
-        title="Pace (min/km)",
-    )
+    
+    fig.update_yaxes(autorange="reversed",tickvals=[v / 60 for v in vals],ticktext=[fmt_pace(v) for v in vals],title="Pace (min/km)")
     return fig
 
 def zona_fc(hr):
@@ -146,7 +130,6 @@ def zona_fc(hr):
     return "Z5 - VO2max"
 
 def zona_fc_vec(hr_series: pd.Series) -> pd.Series:
-    """Vetorizado com np.select — substitui .apply(zona_fc) em toda a Series."""
     fc  = hr_series.to_numpy(dtype=float, na_value=np.nan)
     nan = np.isnan(fc)
     out = np.select(
@@ -198,8 +181,7 @@ def cat_intensity(df):
     if "Intensidade" not in df.columns:
         return df
     df = df.copy()
-    df["Intensidade"] = pd.Categorical(df["Intensidade"],
-                                        categories=INTENSITY_ORDER, ordered=True)
+    df["Intensidade"] = pd.Categorical(df["Intensidade"],categories=INTENSITY_ORDER, ordered=True)
     return df
 
 

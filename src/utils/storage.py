@@ -123,29 +123,25 @@ def get_last_activity_timestamp():
     Usar como parâmetro `after` em get_activities() para sincronização incremental.
     """
     if not os.path.exists(CONSOLIDATED_PATH):
-        print("ℹ️  Nenhuma base consolidada encontrada — extração completa será feita.")
+        print("Nenhuma base consolidada encontrada — extração completa será feita.")
         return None
 
     df = pd.read_csv(CONSOLIDATED_PATH, sep=";")
 
     if "start_date" not in df.columns or df.empty:
-        print("⚠️  Coluna 'start_date' ausente ou base vazia — extração completa será feita.")
+        print("Coluna 'start_date' ausente ou base vazia — extração completa será feita.")
         return None
 
-    df["start_date"] = pd.to_datetime(
-    df["start_date"],
-    dayfirst=True,
-    errors="coerce"
-)
+    df["start_date"] = pd.to_datetime(df["start_date"], dayfirst=True, errors="coerce")
 
     last_date = df["start_date"].max()
 
     if pd.isna(last_date):
-        print("⚠️  Nenhuma data válida encontrada — extração completa será feita.")
+        print("Nenhuma data válida encontrada — extração completa será feita.")
         return None
 
     unix_ts = int(last_date.timestamp())
-    print(f"📅 Última atividade em: {last_date.strftime('%d/%m/%Y %H:%M:%S')} → after={unix_ts}")
+    print(f"Última atividade em: {last_date.strftime('%d/%m/%Y %H:%M:%S')} → after={unix_ts}")
     return unix_ts
 
 
