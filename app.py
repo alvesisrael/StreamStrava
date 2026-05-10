@@ -87,103 +87,249 @@ _KW_COMPILED: dict[str, re.Pattern] = {intensity: re.compile("|".join(re.escape(
 }
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-def mesano_pt(dt_series):
-    return dt_series.dt.strftime("%b %Y").apply(
-        lambda x: f"{MESES_PT.get(x[:3], x[:3])} {x[4:]}")
+# ══════════════════════════════════════════════════════════════════════
+# 🔧 HELPERS + ANÁLISE (VERSÃO LIMPA)
+# ══════════════════════════════════════════════════════════════════════
 
-def normalize_dt(col):
-    return pd.to_datetime(col, dayfirst=True, errors="coerce", utc=True).dt.tz_convert(None)
+def haversine_km(c1, c2):
+    la1, lo1 = math.radians(c1[0]), math.radians(c1[1])
+    la2, lo2 = math.radians(c2[0]), math.radians(c2[1])
+    d = math.sin((la2-la1)/2)**2 + math.cos(la1)*math.cos(la2)*math.sin((lo2-lo1)/2)**2
+    return 2 * 6371 * math.asin(math.sqrt(d))
 
+
+def slice_coords(coords, km_ini, km_fim):
+    cum, buf, dentro = 0.0, [], False
+    for i, pt in enumerate(coords):
+        if i > 0:
+            cum += haversine_km(coords[i-1], pt)
+
+        if cum >= km_ini and not dentro:
+            dentro = True
+            if i > 0:
+                buf.append(coords[i-1])
+
+        if dentro:
+            buf.append(pt)
+
+        if cum >= km_fim:
+            break
+
+    return buf if len(buf) >= 2 else coords
+
+
+@st.cache_data(max_entries=2000, show_spinner=False)
+def decode_polyline(encoded):
+    if not encoded or pd.isna(encoded) or str(encoded) in ("nan", "None", ""):
+        return []
+
+    encoded = str(encoded)
+    coords, idx, lat, lng = [], 0, 0, 0
+
+    while idx < len(encoded):
+        for is_lng in (False, True):
+            shift = result = 0
+            while True:
+                if idx >= len(encoded):
+                    break
+                b = ord(encoded[idx]) - 63
+                idx += 1
+                result |= (b & 0x1f) << shift
+                shift += 5
+                if b < 0x20:
+                    break
+
+            delta = ~(result >> 1) if (result & 1) else (result >> 1)
+
+            if not is_lng:
+                lat += delta
+            else:
+                lng += delta
+
+        coords.append((lat / 1e5, lng / 1e5))
+
+    return coords
+
+
+def analyze_run(laps):
+    insights = []
+
+    if len(laps) >= 4:
+        first = laps["pace_sec_km"].iloc[:len(laps)//2].mean()
+        second = laps["pace_sec_km"].iloc[len(laps)//2:].mean()
+        delta = second - first
+
+        if delta > 10:
+            insights.append(f"⚠️ Queda de ritmo (+{delta:.0f}s/km)")
+        elif delta < -10:
+            insights.append(f"🚀 Negative split ({abs(delta):.0f}s/km)")
+
+    if "average_heartrate" in laps.columns and laps["average_heartrate"].notna().any():
+        first = laps["average_heartrate"].iloc[:len(laps)//2].mean()
+        second = laps["average_heartrate"].iloc[len(laps)//2:].mean()
+        drift = second - first
+
+        if drift > 5:
+            insights.append(f"❤️ Deriva cardíaca (+{drift:.0f} bpm)")
+
+    if "pace_sec_km" in laps.columns:
+        var = laps["pace_sec_km"].std()
+
+        if var < 8:
+            insights.append("💪 Ritmo consistente")
+        elif var > 20:
+            insights.append("⚠️ Ritmo irregular")
+
+    return insights
+
+# ══════════════════════════════════════════════════════════════════════
+# 🔧 CORE UTILS (COMPATÍVEL COM SEU CÓDIGO ATUAL)
+# ══════════════════════════════════════════════════════════════════════
+
+# ── DATA ─────────────────────────────────────────────────────────────
+def normalize_dt(series):
+    return pd.to_datetime(series, errors="coerce")
+
+
+def mesano_pt(series):
+    meses = {
+        1: "jan", 2: "fev", 3: "mar", 4: "abr",
+        5: "mai", 6: "jun", 7: "jul", 8: "ago",
+        9: "set", 10: "out", 11: "nov", 12: "dez"
+    }
+    return series.dt.month.map(meses) + "/" + series.dt.year.astype(str)
+
+
+# ── PACE ─────────────────────────────────────────────────────────────
 def fmt_pace(sec):
-    """Scalar: segundos → 'M:SS'. Use fmt_pace_vec() para Series."""
-    if pd.isna(sec) or sec <= 0:
+    try:
+        sec = float(sec)
+        if sec <= 0 or pd.isna(sec):
+            return "—"
+        m = int(sec // 60)
+        s = int(sec % 60)
+        return f"{m}:{s:02d}"
+    except:
         return "—"
-    s = int(sec)
-    return f"{s // 60}:{s % 60:02d}"
 
-def fmt_pace_vec(sec_series: pd.Series) -> pd.Series:
-    arr  = sec_series.to_numpy(dtype=float)
-    inv  = np.isnan(arr) | (arr <= 0)
-    mins = np.where(inv, 0, arr // 60).astype(int)
-    secs = np.where(inv, 0, arr %  60).astype(int)
 
-    # constrói strings via list comprehension (evita overhead de .apply por célula)
-    out  = [f"{m}:{s:02d}" if not i else "—" for m, s, i in zip(mins, secs, inv)]
-    return pd.Series(out, index=sec_series.index)
+def fmt_pace_vec(series):
+    return series.apply(fmt_pace)
 
-def set_pace_yaxis(fig, pace_sec_series, step_sec=30):
-    mn = max(0, int(pace_sec_series.min()) - step_sec)
-    mx = int(pace_sec_series.max()) + step_sec
-    vals = list(range(mn - mn % step_sec, mx + step_sec, step_sec))
-    
-    fig.update_yaxes(autorange="reversed",tickvals=[v / 60 for v in vals],ticktext=[fmt_pace(v) for v in vals],title="Pace (min/km)")
-    return fig
 
-def zona_fc(hr):
-    """Escalar — mantido para compatibilidade pontual."""
-    if pd.isna(hr): return "Sem FC"
-    if hr < FC_MAX * 0.70: return "Z1 - Regenerativo"
-    if hr < FC_MAX * 0.80: return "Z2 - Aeróbico"
-    if hr < FC_MAX * 0.87: return "Z3 - Tempo"
-    if hr < FC_MAX * 0.93: return "Z4 - Limiar"
-    return "Z5 - VO2max"
+def set_pace_yaxis(fig, pace_series):
+    if pace_series.empty:
+        return
+    pmin = pace_series.min() / 60
+    pmax = pace_series.max() / 60
+    fig.update_yaxes(autorange="reversed", range=[pmax + 0.2, pmin - 0.2])
 
-def zona_fc_vec(hr_series: pd.Series) -> pd.Series:
-    fc  = hr_series.to_numpy(dtype=float, na_value=np.nan)
-    nan = np.isnan(fc)
-    out = np.select(
-        [nan,
-         (~nan) & (fc < FC_MAX * 0.70),
-         (~nan) & (fc < FC_MAX * 0.80),
-         (~nan) & (fc < FC_MAX * 0.87),
-         (~nan) & (fc < FC_MAX * 0.93)],
-        ["Sem FC",
-         "Z1 - Regenerativo",
-         "Z2 - Aeróbico",
-         "Z3 - Tempo",
-         "Z4 - Limiar"],
-        default="Z5 - VO2max",
-    )
-    return pd.Series(out, index=hr_series.index, name="Zona FC")
 
-def hex_to_rgba(hex_color, alpha=200):
-    h = hex_color.lstrip("#")
-    return [int(h[i:i+2], 16) for i in (0, 2, 4)] + [alpha]
-
-def pace_to_rgba(pace_sec, min_pace=220, max_pace=420, alpha=220):
-    t = min(1, max(0, (pace_sec - min_pace) / (max_pace - min_pace)))
-    return [round(46 + t*185), round(204 - t*128), round(113 - t*53), alpha]
-
-def fc_to_hex(fc_bpm):
-    if pd.isna(fc_bpm) or float(fc_bpm) <= 0: return "#3498DB"
-    fc = float(fc_bpm)
-    if fc < FC_MAX * 0.70: return "#3498DB"
-    if fc < FC_MAX * 0.80: return "#2ECC71"
-    if fc < FC_MAX * 0.87: return "#F39C12"
-    if fc < FC_MAX * 0.93: return "#E67E22"
-    return "#E74C3C"
-
-def elev_gain_to_hex(elev_m_per_km):
-    if pd.isna(elev_m_per_km) or float(elev_m_per_km) < 0: return "#2ECC71"
-    t = min(1.0, max(0.0, float(elev_m_per_km) / 45.0))
-    return "#{:02X}{:02X}{:02X}".format(
-        round(46 + t*185), round(204 - t*128), round(113 - t*53))
-
+# ── CORES / MAPA ─────────────────────────────────────────────────────
 def pace_to_hex(pace_sec):
-    t = min(1, max(0, (float(pace_sec or 300) - 220) / 200))
-    r = round(231 - t * (231 - 46))
-    g = round(76  + t * (204 - 76))
-    b = round(60  + t * (113 - 60))
-    return "#{:02X}{:02X}{:02X}".format(r, g, b)
+    if pd.isna(pace_sec):
+        return "#95A5A6"
+    if pace_sec < 270:
+        return "#E74C3C"
+    elif pace_sec < 330:
+        return "#F39C12"
+    elif pace_sec < 390:
+        return "#2ECC71"
+    else:
+        return "#3498DB"
 
-def cat_intensity(df):
-    if "Intensidade" not in df.columns:
-        return df
-    df = df.copy()
-    df["Intensidade"] = pd.Categorical(df["Intensidade"],categories=INTENSITY_ORDER, ordered=True)
-    return df
 
+def fc_to_hex(fc):
+    if pd.isna(fc):
+        return "#BDC3C7"
+    if fc < FC_MAX * 0.7:
+        return "#2ECC71"
+    elif fc < FC_MAX * 0.8:
+        return "#3498DB"
+    elif fc < FC_MAX * 0.87:
+        return "#F39C12"
+    elif fc < FC_MAX * 0.93:
+        return "#E67E22"
+    else:
+        return "#E74C3C"
+
+
+def elev_gain_to_hex(elev_per_km):
+    if elev_per_km < 10:
+        return "#2ECC71"
+    elif elev_per_km < 30:
+        return "#F1C40F"
+    else:
+        return "#E74C3C"
+
+
+# ── INTENSIDADE ──────────────────────────────────────────────────────
+def cat_intensity(val):
+    if pd.isna(val):
+        return "Moderado"
+    val = str(val).strip().title()
+    return val if val in INTENSITY_COLORS else "Moderado"
+
+
+def zona_fc_vec(series):
+    def zona(fc):
+        if pd.isna(fc):
+            return "Sem FC"
+        if fc < FC_MAX * 0.7:
+            return "Z1 - Regenerativo"
+        elif fc < FC_MAX * 0.8:
+            return "Z2 - Aeróbico"
+        elif fc < FC_MAX * 0.87:
+            return "Z3 - Tempo"
+        elif fc < FC_MAX * 0.93:
+            return "Z4 - Limiar"
+        else:
+            return "Z5 - VO2max"
+    return series.apply(zona)
+
+
+# ── POLYLINE ─────────────────────────────────────────────────────────
+@st.cache_data(max_entries=2000, show_spinner=False)
+def decode_polyline(encoded):
+    if not encoded or pd.isna(encoded) or str(encoded) in ("nan", "None", ""):
+        return []
+
+    encoded = str(encoded)
+    coords, idx, lat, lng = [], 0, 0, 0
+
+    while idx < len(encoded):
+        for is_lng in (False, True):
+            shift = result = 0
+            while True:
+                if idx >= len(encoded):
+                    break
+                b = ord(encoded[idx]) - 63
+                idx += 1
+                result |= (b & 0x1f) << shift
+                shift += 5
+                if b < 0x20:
+                    break
+
+            delta = ~(result >> 1) if (result & 1) else (result >> 1)
+
+            if not is_lng:
+                lat += delta
+            else:
+                lng += delta
+
+        coords.append((lat / 1e5, lng / 1e5))
+
+    return coords
+
+
+def mesano_pt(series):
+    """Retorna mês/ano em português (ex: 'abr/2026')"""
+    meses = {
+        1: "jan", 2: "fev", 3: "mar", 4: "abr",
+        5: "mai", 6: "jun", 7: "jul", 8: "ago",
+        9: "set", 10: "out", 11: "nov", 12: "dez"
+    }
+    return series.dt.month.map(meses) + "/" + series.dt.year.astype(str)
 
 # ── decode_polyline cacheado ──────────────────────────────────────────────────
 @st.cache_data(max_entries=2000, show_spinner=False)
@@ -1526,10 +1672,9 @@ with tab_mapa:
 
         _label_to_id = {_make_label(row): row["id"] for _, row in df_map.iterrows()}
         _all_labels  = list(_label_to_id.keys())
-        sel_labels   = st.multiselect(
-            "Selecione atividades para exibir e comparar",
+        sel_labels   = st.multiselect("Selecione atividades para exibir e comparar",
             options=_all_labels,
-            default=_all_labels[:min(10, len(_all_labels))],
+            default=_all_labels[:min(2, len(_all_labels))],
             help="Digite para buscar por nome, data ou distância.",
             placeholder="Busque por nome, data ou distância...")
 
@@ -1574,287 +1719,80 @@ with tab_mapa:
                 "coords":   coords,
             })
 
-        # ── Mapa Folium ──────────────────────────────────────────────────────
-        st.subheader("🗺️ Mapa — rotas animadas")
-        if not HAS_FOLIUM:
-            st.error("Instale: `pip install streamlit-folium folium`")
+with tab_mapa:
+    st.title("🗺️ Mapa de Rotas")
+
+    poly_col = next((c for c in ["map_summary_polyline","summary_polyline"]
+                     if c in df_raw.columns), None)
+
+    df_map = df_run.dropna(subset=["latitude","longitude"]).copy()
+    df_map = df_map.sort_values("start_date", ascending=False)
+
+    labels = df_map.apply(
+        lambda r: f"{r['start_date'].strftime('%d/%m')} — {r['distance_km']:.1f}km",
+        axis=1
+    )
+
+    selected = st.multiselect(
+        "Selecione atividades",
+        options=df_map["id"],
+        format_func=lambda x: labels[df_map["id"] == x].values[0],
+        default=df_map["id"].head(2)
+    )
+
+    if not selected:
+        st.stop()
+
+    df_map = df_map[df_map["id"].isin(selected)]
+
+    # Centro do mapa
+    lat_c = df_map["latitude"].mean()
+    lng_c = df_map["longitude"].mean()
+
+    m = folium.Map(location=[lat_c, lng_c], zoom_start=13)
+
+    for _, row in df_map.iterrows():
+
+        coords = []
+        if poly_col and pd.notna(row[poly_col]):
+            coords = decode_polyline(row[poly_col])
+
+        laps = lps_run[lps_run["activity_id"] == row["id"]]
+        insights = analyze_run(laps)
+
+        popup_html = f"""
+        <b>{row['name']}</b><br>
+        {row['distance_km']:.1f} km<br>
+        Pace: {fmt_pace(row['pace_sec_km'])}/km<br>
+        {"<br>".join(insights)}
+        """
+
+        if coords:
+            folium.PolyLine(
+                coords,
+                color="blue",
+                weight=4,
+                popup=popup_html
+            ).add_to(m)
         else:
-            _routes_snap = routes
-            _lps_snap    = lps_run
-            _poly_snap   = poly_col
+            folium.CircleMarker(
+                [row["latitude"], row["longitude"]],
+                radius=6,
+                color="blue",
+                popup=popup_html
+            ).add_to(m)
 
-            try:
-                _frag = st.fragment
-            except AttributeError:
-                def _frag(f): return f
+    st_folium(m, width="100%", height=500)
 
-            
+    # COMPARAÇÃO AUTOMÁTICA
+    if len(df_map) >= 2:
+        st.markdown("### 🔍 Comparação")
 
-            @_frag
-            def _render_folium():
-                _MODES = ["Intensidade","Pace","BPM","Elevacao"]
-                mode_map = st.radio("Colorir rotas por", _MODES, horizontal=True)
-                tile_map = st.radio("Mapa",["Claro","Satélite"],horizontal=True)
+        melhor = df_map.loc[df_map["pace_sec_km"].idxmin()]
+        pior   = df_map.loc[df_map["pace_sec_km"].idxmax()]
 
-                # ── helpers de km ─────────────────────────────────────────────
-                def _hav_seg(c1, c2):
-                    la1, lo1 = math.radians(c1[0]), math.radians(c1[1])
-                    la2, lo2 = math.radians(c2[0]), math.radians(c2[1])
-                    d = math.sin((la2-la1)/2)**2 + math.cos(la1)*math.cos(la2)*math.sin((lo2-lo1)/2)**2
-                    return 2*6371*math.asin(math.sqrt(d))
-
-                def _slice_coords(coords, km_ini, km_fim):
-                    cum, buf, dentro = 0.0, [], False
-                    for i, pt in enumerate(coords):
-                        if i > 0:
-                            cum += _hav_seg(coords[i-1], pt)
-                        if cum >= km_ini and not dentro:
-                            dentro = True
-                            if i > 0:
-                                buf.append(coords[i-1])
-                        if dentro:
-                            buf.append(pt)
-                        if cum >= km_fim:
-                            break
-                    return buf if len(buf) >= 2 else coords
-
-                # ── slider de trecho ──────────────────────────────────────────
-                _km_max = max((r["km"] for r in _routes_snap), default=10.0)
-                km_ini, km_fim = st.slider(
-                    "Trecho visível",
-                    min_value=0.0, max_value=float(math.ceil(_km_max)),
-                    value=(0.0, float(math.ceil(_km_max))),
-                    step=0.1, format="%.1f km",
-                    key="km_slicer"
-                )
-
-                ESRI_SAT_URL  = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
-                ESRI_SAT_ATTR = "Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community"
-                ESRI_TOPO_URL  = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}"
-                ESRI_TOPO_ATTR = "Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ, TomTom, Intermap, iPC, USGS, FAO, NPS, NRCAN, GeoBase, Kadaster NL, Ordnance Survey, Esri Japan, METI, Esri China (Hong Kong), and the GIS User Community"
-
-                m = folium.Map(location=[lat_c, lng_c], zoom_start=13, tiles=None)
-                tiles = {"Claro":lambda: folium.TileLayer("CartoDB positron", name="Claro"),"Satélite":lambda: folium.TileLayer(ESRI_SAT_URL, attr=ESRI_SAT_ATTR,name="Satélite ESRI")}
-                
-                # tiles = {
-                #     "Claro":      lambda: folium.TileLayer("CartoDB positron", name="Claro"),
-                #     "Escuro":     lambda: folium.TileLayer("CartoDB dark_matter", name="Escuro"),
-                #     "Topográfico":lambda: folium.TileLayer("OpenTopoMap", name="Topográfico"),
-                #     "Satélite":   lambda: folium.TileLayer(ESRI_SAT_URL, attr=ESRI_SAT_ATTR, name="Satélite ESRI"),
-                #     "Topo ESRI":  lambda: folium.TileLayer(ESRI_TOPO_URL, attr=ESRI_TOPO_ATTR, name="Topo ESRI"),
-                #     "Voyager":    lambda: folium.TileLayer("CartoDB Voyager", name="Voyager"),
-                # }
-                
-                tiles.get(tile_map, tiles["Claro"])().add_to(m)
-
-                try:
-                    from folium.plugins import AntPath, MiniMap
-                    MiniMap(toggle_display=True, position="bottomleft",tile_layer="CartoDB positron", zoom_level_offset=-5).add_to(m)
-                    _ant = True
-                except Exception:
-                    _ant = False
-
-                def _seg_color(lap, r, mode):
-                    if mode == "Pace":
-                        return pace_to_hex(lap.get("pace_sec_km", r["pace_sec"]))
-                    if mode == "BPM":
-                        return fc_to_hex(lap.get("average_heartrate", r["hr"]))
-                    if mode == "Elevacao":
-                        d = float(lap.get("distance_km") or 1)
-                        e = float(lap.get("total_elevation_gain") or 0)
-                        return elev_gain_to_hex(e / d if d > 0 else 0)
-                    return r["color_hex"]
-
-                def _add_km_markers(coords, color, fg):
-                    def _hav(c1, c2):
-                        la1,lo1 = math.radians(c1[0]), math.radians(c1[1])
-                        la2,lo2 = math.radians(c2[0]), math.radians(c2[1])
-                        d = math.sin((la2-la1)/2)**2 + math.cos(la1)*math.cos(la2)*math.sin((lo2-lo1)/2)**2
-                        return 2*6371*math.asin(math.sqrt(d))
-                    cum, last = 0.0, 0
-                    for i in range(1, len(coords)):
-                        cum += _hav(coords[i-1], coords[i])
-                        if int(cum) > last:
-                            last = int(cum)
-                            folium.Marker(coords[i], icon=folium.DivIcon(
-                                html=f'<div style="font-size:9px;font-weight:700;color:#fff;'
-                                     f'background:{color};padding:1px 5px;border-radius:10px;'
-                                     f'box-shadow:0 1px 3px rgba(0,0,0,.5)">{last}</div>',
-                                icon_size=(22,15), icon_anchor=(11,7))).add_to(fg)
-
-                def _lap_popup_html(lap, r):
-                    ln  = int(lap.get("lap_index", 0) or 0)
-                    dk  = round(float(lap.get("distance_km") or 0), 2)
-                    pc  = fmt_pace(lap.get("pace_sec_km") or 0)
-                    hr  = int(lap.get("average_heartrate") or 0) or "—"
-                    hrm = int(lap.get("max_heartrate") or 0) or "—"
-                    elv = float(lap.get("total_elevation_gain") or 0)
-                    cad = int(float(lap.get("average_cadence") or 0) * 2) or "—"
-                    ci  = r["color_hex"]
-                    rows = (
-                        "<tr><td style='color:#888;padding:1px 8px 1px 0'>Pace</td>"
-                        "<td><b>" + pc + "/km</b></td></tr>"
-                        "<tr><td style='color:#888;padding:1px 8px 1px 0'>FC média</td>"
-                        "<td><b>" + str(hr) + " bpm</b></td></tr>"
-                        "<tr><td style='color:#888;padding:1px 8px 1px 0'>FC máx</td>"
-                        "<td><b>" + str(hrm) + " bpm</b></td></tr>"
-                        "<tr><td style='color:#888;padding:1px 8px 1px 0'>Elevação</td>"
-                        "<td><b>" + f"{elv:.0f}" + " m</b></td></tr>"
-                        + (f"<tr><td style='color:#888;padding:1px 8px 1px 0'>Cadência</td>"
-                           f"<td><b>{cad} spm</b></td></tr>" if cad != "—" else "")
-                    )
-                    return (
-                        "<div style='font-family:sans-serif;min-width:170px;padding:2px'>"
-                        "<b style='font-size:12px'>" + r["name"][:25] + "</b>"
-                        "<span style='color:#888;font-size:10px'> · " + r["date"] + "</span><br>"
-                        "<div style='margin:4px 0 6px;padding:2px 7px;border-radius:4px;"
-                        "background:" + ci + "20;border-left:3px solid " + ci + ";"
-                        "font-size:11px;font-weight:600'>Lap " + str(ln) + " · " + str(dk) + " km</div>"
-                        "<table style='font-size:11px;width:100%'>" + rows + "</table></div>")
-
-                def _popup(r):
-                    ci = r["color_hex"]
-                    return (
-                        "<div style='font-family:sans-serif;min-width:190px;padding:2px'>"
-                        "<b style='font-size:13px'>" + r["name"][:30] + "</b><br>"
-                        "<span style='color:#888;font-size:11px'>" + r["date"] + "</span>"
-                        "<table style='font-size:12px;width:100%;margin-top:6px'>"
-                        "<tr><td style='color:#888;padding:2px 10px 2px 0'>Dist</td>"
-                        "<td><b>" + str(r["km"]) + " km</b></td></tr>"
-                        "<tr><td style='color:#888;padding:2px 10px 2px 0'>Pace</td>"
-                        "<td><b>" + r["pace"] + "/km</b></td></tr>"
-                        "<tr><td style='color:#888;padding:2px 10px 2px 0'>FC</td>"
-                        "<td><b>" + str(r["hr"]) + " bpm</b></td></tr>"
-                        "</table>"
-                        "<div style='margin-top:7px;padding:3px 8px;border-radius:4px;"
-                        "background:" + ci + "20;border-left:3px solid " + ci + ";"
-                        "font-size:11px;color:#444'>" + r["intensity"] + "</div></div>")
-
-                for r in _routes_snap:
-                    _fg_name = r["date"] + " — " + r["name"][:20] + " (" + str(r["km"]) + "km)"
-                    fg = folium.FeatureGroup(name=_fg_name, show=True)
-                    if _poly_snap and r["coords"]:
-                        coords_all = _slice_coords(r["coords"], km_ini, km_fim)  # ← ALTERADO
-                        n_pts = len(coords_all) - 1
-                        act_laps = (_lps_snap[_lps_snap["activity_id"] == r["id"]]
-                                    .sort_values("lap_index")
-                                    if not _lps_snap.empty else pd.DataFrame())
-                        if mode_map == "Intensidade":
-                            if _ant:
-                                from folium.plugins import AntPath
-                                AntPath(coords_all, color=r["color_hex"], weight=4.5,
-                                        dash_array=[12,20], delay=800, opacity=0.92,
-                                        popup=folium.Popup(_popup(r), max_width=220)).add_to(fg)
-                            else:
-                                folium.PolyLine(coords_all, color=r["color_hex"], weight=4.5,
-                                               opacity=0.9,
-                                               popup=folium.Popup(_popup(r), max_width=220)).add_to(fg)
-                        else:
-                            if not act_laps.empty and n_pts > 0:
-                                total_km = act_laps["distance_km"].sum()
-                                cum = 0.0
-                                for _, lap in act_laps.iterrows():
-                                    frac = float(lap["distance_km"]) / total_km if total_km > 0 else 1/len(act_laps)
-                                    i0 = int(cum * n_pts)
-                                    i1 = min(n_pts, int((cum + frac) * n_pts) + 1)
-                                    seg = coords_all[i0:i1+1]
-                                    if len(seg) >= 2:
-                                        cseg = _seg_color(lap, r, mode_map)
-                                        if _ant:
-                                            from folium.plugins import AntPath
-                                            AntPath(seg, color=cseg, weight=5,
-                                                    dash_array=[12,20], delay=800, opacity=0.9).add_to(fg)
-                                        else:
-                                            folium.PolyLine(seg, color=cseg, weight=5, opacity=0.9).add_to(fg)
-                                    cum += frac
-                            else:
-                                cseg = _seg_color({}, r, mode_map)
-                                if _ant:
-                                    from folium.plugins import AntPath
-                                    AntPath(coords_all, color=cseg, weight=5,
-                                            dash_array=[12,20], delay=800, opacity=0.9).add_to(fg)
-                                else:
-                                    folium.PolyLine(coords_all, color=cseg, weight=5, opacity=0.9).add_to(fg)
-
-                        # overlays invisíveis com popup por lap
-                        if not act_laps.empty and n_pts > 0:
-                            total_km2 = act_laps["distance_km"].sum()
-                            cum2 = 0.0
-                            for _, lap2 in act_laps.iterrows():
-                                frac2 = float(lap2["distance_km"])/total_km2 if total_km2>0 else 1/len(act_laps)
-                                i02 = int(cum2 * n_pts)
-                                i12 = min(n_pts, int((cum2+frac2)*n_pts)+1)
-                                seg2 = coords_all[i02:i12+1]
-                                if len(seg2) >= 2:
-                                    folium.PolyLine(seg2, color=r["color_hex"], weight=10, opacity=0.001,
-                                                   popup=folium.Popup(_lap_popup_html(lap2,r), max_width=220)).add_to(fg)
-                                cum2 += frac2
-                        else:
-                            folium.PolyLine(coords_all, color=r["color_hex"], weight=8, opacity=0.001,
-                                           popup=folium.Popup(_popup(r), max_width=220)).add_to(fg)
-
-                        _add_km_markers(coords_all, r["color_hex"], fg)
-                        folium.CircleMarker(coords_all[0], radius=6, color=r["color_hex"],
-                                           fill=True, fill_opacity=1, weight=2, tooltip="Início").add_to(fg)
-                    else:
-                        folium.CircleMarker([r["lat"],r["lng"]],
-                                           radius=max(5, min(16, r["km"]*0.9)),
-                                           color=r["color_hex"], fill=True, fill_opacity=0.8,
-                                           popup=folium.Popup(_popup(r), max_width=220)).add_to(fg)
-                    fg.add_to(m)
-
-                folium.LayerControl(collapsed=True, position="topright").add_to(m)
-
-                # Legenda
-                _li_int = "".join(
-                    "<div style='display:flex;align-items:center;gap:6px;margin:3px 0;"
-                    "color:rgba(255,255,255,.85)'>"
-                    "<div style='width:16px;height:4px;background:" + c + ";"
-                    "border-radius:2px;flex-shrink:0'></div>" + k + "</div>"
-                    for k, c in INTENSITY_COLORS.items() if k != "Skate")
-                _li_pace = ("<div style='display:flex;align-items:center;gap:5px;"
-                            "color:rgba(255,255,255,.8)'><span>rápido</span>"
-                            "<div style='width:50px;height:5px;border-radius:3px;"
-                            "background:linear-gradient(to right,rgb(231,76,60),rgb(46,204,113))'>"
-                            "</div><span>lento</span></div>")
-                _li_fc = "".join(
-                    "<div style='display:flex;align-items:center;gap:6px;margin:3px 0;"
-                    "color:rgba(255,255,255,.85)'>"
-                    "<div style='width:16px;height:4px;background:" + c + ";border-radius:2px'></div>" + z + "</div>"
-                    for z, c in [
-                        (f"Z1 <{round(FC_MAX*0.70)}bpm","#3498DB"),
-                        (f"Z2 <{round(FC_MAX*0.80)}","#2ECC71"),
-                        (f"Z3 <{round(FC_MAX*0.87)}","#F39C12"),
-                        (f"Z4 <{round(FC_MAX*0.93)}","#E67E22"),
-                        (f"Z5 ≥{round(FC_MAX*0.93)}","#E74C3C"),
-                    ])
-                _li_elev = ("<div style='display:flex;align-items:center;gap:5px;"
-                            "color:rgba(255,255,255,.8)'><span>plano</span>"
-                            "<div style='width:50px;height:5px;border-radius:3px;"
-                            "background:linear-gradient(to right,rgb(46,204,113),rgb(231,76,60))'>"
-                            "</div><span>morro</span></div>")
-                _LEG = {
-                    "Intensidade":           ("Intensidade", _li_int),
-                    "Pace (rapido/lento)":   ("Pace",        _li_pace),
-                    "FC por zona":           ("FC",          _li_fc),
-                    "Elevacao por segmento": ("Elevação",    _li_elev),
-                }
-                leg_title, leg_items = _LEG.get(mode_map, ("",""))
-                m.get_root().html.add_child(folium.Element(
-                    "<div style='position:absolute;bottom:36px;right:52px;z-index:9999;"
-                    "background:rgba(10,10,10,0.72);padding:9px 13px;border-radius:10px;"
-                    "font-size:12px;color:rgba(255,255,255,.9)'>"
-                    "<div style='font-weight:600;margin-bottom:5px'>" + leg_title + "</div>"
-                    + leg_items + "</div>"))
-                
-                _expandir    = st.checkbox("🔍 Expandir mapa", value=False, key="expand_map")
-                _map_h_outer = 720 if _expandir else 520
-                
-                st_folium(m, use_container_width=True, height=_map_h_outer, returned_objects=[])
-                _hint = "Clique numa rota para detalhes" if _poly_snap else "Tamanho = distância"
-                st.caption(_hint + " · Ative/desative rotas no controle (canto superior direito)"
-                           + (" · Animação AntPath ativa" if _ant else ""))
-            _render_folium()
+        st.write(f"🏆 Melhor pace: {fmt_pace(melhor['pace_sec_km'])}/km")
+        st.write(f"📉 Pior pace: {fmt_pace(pior['pace_sec_km'])}/km")
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  11 · HISTÓRICO
