@@ -1801,7 +1801,7 @@ def _build_route_map_html(
                 f"{insights_block}</div>")
 
     for a in act_data:
-        act_id, name, date, km, pace_sec, hr, elev, color, poly_str, _ = a
+        act_id, name, date, km, pace_sec, hr, elev, color, poly_str, _, location = a
         coords = decode_polyline(poly_str) if poly_str else []
 
         fg = folium.FeatureGroup(name=f"{date} — {name[:22]} ({km:.1f} km)", show=True)
