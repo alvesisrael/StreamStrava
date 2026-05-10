@@ -650,10 +650,19 @@ with tab_hoje:
     # ── Cards linha 2: forma do dia (all-time, não filtrado) ─────────────────
     st.caption("**Forma atual** — baseada em todo o histórico (independente do filtro de período)")
     ca, cb, cc, cd = st.columns(4)
-    ca.metric("⚡ ACWR (7d)",      f"{acwr:.2f}", acwr_lbl, delta_color=acwr_cor)
-    cb.metric("✨ TSB — Forma",     f"{tsb_at:+.0f}", tsb_lbl,
-              delta_color="normal" if tsb_at >= 0 else "inverse")
-    cc.metric("💪 CTL — Fitness",  f"{ctl_at:.0f}", help="Carga crônica 42 dias. Quanto maior, maior a base.")
+    ca.metric("⚡ ACWR (7d)",     f"{acwr:.2f}", acwr_lbl, delta_color=acwr_cor,
+              help="Acute:Chronic Workload Ratio — razão entre a carga dos últimos 7 dias e a média das 4 semanas anteriores. "
+                   "Zona segura: 0,8–1,3. Abaixo de 0,8 = subcarregado (espaço para aumentar). "
+                   "Acima de 1,3 = atenção. Acima de 1,5 = alto risco de lesão por overload.")
+    cb.metric("✨ TSB — Forma",    f"{tsb_at:+.0f}", tsb_lbl,
+              delta_color="normal" if tsb_at >= 0 else "inverse",
+              help="Training Stress Balance = CTL − ATL (Fitness − Fadiga). "
+                   "Positivo = atleta descansado. Negativo = fatigado. "
+                   "Janela ideal para provas e treinos de qualidade: entre +5 e +20. "
+                   "Abaixo de −20 = risco de overtraining.")
+    cc.metric("💪 CTL — Fitness",  f"{ctl_at:.0f}",
+              help="Chronic Training Load — carga crônica calculada por média exponencial dos últimos 42 dias "
+                   "sobre o suffer score. Representa sua base de condicionamento: quanto maior, maior o motor aeróbico.")
     cd.metric("📏 KM últimos 7d",  f"{km_7d:.0f} km")
 
     # Alert inteligente
@@ -1184,11 +1193,20 @@ with tab_carga:
             atl_at = pmc_w["ATL"].iloc[-1] if len(pmc_w) else 0
             tsb_at2= pmc_w["TSB"].iloc[-1] if len(pmc_w) else 0
             cp1,cp2,cp3 = st.columns(3)
-            cp1.metric("💪 CTL — Fitness", f"{ctl_at:.0f}")
-            cp2.metric("😓 ATL — Fadiga",  f"{atl_at:.0f}")
+            cp1.metric("💪 CTL — Fitness", f"{ctl_at:.0f}",
+                       help="Chronic Training Load — média exponencial 42 dias do suffer score. "
+                            "Representa sua base de condicionamento. Cresce devagar (semanas) e cai devagar.")
+            cp2.metric("😓 ATL — Fadiga",  f"{atl_at:.0f}",
+                       help="Acute Training Load — média exponencial 7 dias do suffer score. "
+                            "Representa a fadiga recente. Sobe rápido com treinos pesados, cai rápido com descanso.")
             cp3.metric("✨ TSB — Forma",   f"{tsb_at2:+.0f}",
                        delta=("✅ Pico" if 5<=tsb_at2<=20 else "⚠️ Fatigado" if tsb_at2<-15 else "OK"),
-                       delta_color="normal" if tsb_at2>=0 else "inverse")
+                       delta_color="normal" if tsb_at2>=0 else "inverse",
+                       help="Training Stress Balance = CTL − ATL (Fitness − Fadiga). "
+                            "+5 a +20: janela de pico — ideal para provas e treinos de qualidade. "
+                            "0 a +5: neutro, treinando normalmente. "
+                            "−10 a 0: alguma fadiga acumulada. "
+                            "Abaixo de −20: risco de overtraining.")
             fig_pmc = go.Figure()
             fig_pmc.add_scatter(x=pmc_w["Semana"], y=pmc_w["CTL"], name="CTL — fitness",
                                 mode="lines", line=dict(color=BLUE, width=2.5),
