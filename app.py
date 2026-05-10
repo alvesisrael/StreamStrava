@@ -829,76 +829,212 @@ with tab_desemp:
                                   if df_run["pr_count"].notna().any() else "—")
     st.markdown("---")
 
-    # ── 🏁 Preditor de Prova — Fórmula de Riegel ─────────────────────────────
-    def _riegel(t1_sec, d1_m, d2_m): return t1_sec * (d2_m / d1_m) ** 1.06
+    # ── 🏁 Preditor de Provas — VDOT (Jack Daniels) + Riegel ────────────────
     def _fmt_hms(sec):
         sec = int(sec); h, r = divmod(sec, 3600); m, s = divmod(r, 60)
         return f"{h}h{m:02d}m{s:02d}s" if h else f"{m}:{s:02d}"
 
+    def _riegel(t1_sec, d1_m, d2_m):
+        """Riegel 1977: T₂ = T₁ × (D₂/D₁)^1.06"""
+        return t1_sec * (d2_m / d1_m) ** 1.06
+
+    def _vdot_from_time(dist_m, time_sec):
+        """VDOT de Jack Daniels a partir de um tempo de prova."""
+        T = time_sec / 60          # minutos
+        v = dist_m / T             # m/min
+        pct = (0.8
+               + 0.1894393 * math.exp(-0.012778  * T)
+               + 0.2989558 * math.exp(-0.1932605 * T))
+        vo2 = -4.60 + 0.182258 * v + 0.000104 * v ** 2
+        return vo2 / pct
+
+    def _time_from_vdot(dist_m, vdot):
+        """Busca binária: tempo predito a partir do VDOT para uma distância."""
+        lo, hi = 60.0, 360000.0   # 1 min … 100 h
+        for _ in range(64):
+            mid = (lo + hi) / 2
+            T   = mid / 60
+            v   = dist_m / T
+            pct = (0.8
+                   + 0.1894393 * math.exp(-0.012778  * T)
+                   + 0.2989558 * math.exp(-0.1932605 * T))
+            if (-4.60 + 0.182258 * v + 0.000104 * v ** 2) > pct * vdot:
+                lo = mid
+            else:
+                hi = mid
+        return (lo + hi) / 2
+
+    def _vdot_categoria(v):
+        if   v >= 60: return "🔵 Elite"
+        elif v >= 55: return "🟣 Elite amador"
+        elif v >= 50: return "🟢 Competitivo"
+        elif v >= 45: return "🟡 Avançado"
+        elif v >= 35: return "🟠 Intermediário"
+        else:         return "⚪ Recreativo"
+
     _DIST_M = {"1K":1000,"3K":3000,"5K":5000,"10K":10000,"HM 21K":21097,"Maratona":42195}
+    _ICONS  = {"1K":"🚀","3K":"💨","5K":"🏃","10K":"⚡","HM 21K":"🌟","Maratona":"🏅"}
+
+    # Referência: distância maior = VDOT mais confiável (aeróbio)
     _ref_sec, _ref_dist, _ref_nome = None, None, None
     if not be_raw.empty:
-        for _nb, _db in [("10k",10000),("5k",5000),("1k",1000)]:
+        for _nb, _db in [("half-marathon",21097),("10k",10000),("5k",5000),("1k",1000)]:
             _sub = be_raw[be_raw["name"].str.lower() == _nb]
             if not _sub.empty:
                 _ref_sec  = float(_sub["pace_sec_km"].min() * _db / 1000)
-                _ref_dist = _db; _ref_nome = _nb.upper(); break
+                _ref_dist = _db
+                _ref_nome = {"half-marathon":"HM 21K"}.get(_nb, _nb.upper())
+                break
 
     if _ref_sec and _ref_dist:
+        _vdot = _vdot_from_time(_ref_dist, _ref_sec)
+
         st.subheader("🏁 Preditor de Provas")
-        st.caption(f"Baseado no seu melhor **{_ref_nome}** ({_fmt_hms(_ref_sec)}) · "
-                   "Fórmula de Riegel: T₂ = T₁ × (D₂/D₁)^1.06")
-        _preds = {d: _riegel(_ref_sec, _ref_dist, m) for d,m in _DIST_M.items() if m != _ref_dist}
-        _ICONS = {"1K":"🚀","3K":"💨","5K":"🏃","10K":"⚡","HM 21K":"🌟","Maratona":"🏅"}
-        _cols_pred = st.columns(len(_preds))
-        for _ci, (_d, _t) in zip(_cols_pred, _preds.items()):
-            _ci.metric(f"{_ICONS.get(_d,'')} {_d}", _fmt_hms(_t),
-                       f"pace {fmt_pace(_t/(_DIST_M[_d]/1000))}/km", delta_color="off")
-        # Gráfico
-        _all_preds = {**{_ref_nome: _ref_sec}, **_preds}
-        _chart_data = sorted(
-            [{"Distância": d,
-              "Pace_sec":  _all_preds[d] / (_DIST_M.get(d, _ref_dist) / 1000),
-              "Pace_min":  _all_preds[d] / (_DIST_M.get(d, _ref_dist) / 1000) / 60,
-              "Pace_fmt":  fmt_pace(_all_preds[d] / (_DIST_M.get(d, _ref_dist) / 1000)),
-              "Tempo":     _fmt_hms(_all_preds[d]),
-              "is_ref":    d == _ref_nome}
-             for d in _all_preds if _DIST_M.get(d, _ref_dist) > 0],
-            key=lambda x: _DIST_M.get(x["Distância"], _ref_dist))
-        _cd = pd.DataFrame(_chart_data)
+
+        # Cards de VDOT
+        pv1, pv2, pv3 = st.columns(3)
+        pv1.metric("🧬 VDOT estimado", f"{_vdot:.1f}",
+                   _vdot_categoria(_vdot),
+                   delta_color="off",
+                   help="VDOT (Jack Daniels) é uma estimativa do seu VO2max funcional "
+                        "calculada a partir da sua performance em prova.\n\n"
+                        "≥ 60: Elite · ≥ 55: Elite amador · ≥ 50: Competitivo\n\n"
+                        "≥ 45: Avançado · ≥ 35: Intermediário · < 35: Recreativo\n\n"
+                        "Diferente do VO2max de laboratório, o VDOT já incorpora "
+                        "sua eficiência de corrida — por isso é mais útil para previsão.")
+        pv2.metric("📏 Referência usada", f"{_ref_nome}",
+                   f"{_fmt_hms(_ref_sec)} · pace {fmt_pace(_ref_sec/_ref_dist*1000)}/km",
+                   delta_color="off",
+                   help="Distância mais longa registrada — usada como base do VDOT.\n\n"
+                        "Distâncias maiores dão previsões mais confiáveis para maratona e HM "
+                        "porque o esforço é predominantemente aeróbio, "
+                        "que é exatamente o que o modelo VDOT modela.")
+        pv3.metric("🎯 Modelo principal", "VDOT — Jack Daniels",
+                   "Riegel mostrado como comparativo",
+                   delta_color="off",
+                   help="VDOT modela o sistema aeróbio: mais preciso para 5K+.\n\n"
+                        "Riegel (T₂ = T₁ × (D₂/D₁)^1.06) é puramente estatístico "
+                        "e tende a ser conservador em distâncias longas.\n\n"
+                        "O Garmin usa modelo similar ao VDOT combinado com dados de FC.")
+
+        st.markdown("---")
+
+        # Tabela comparativa VDOT vs Riegel
+        _dist_pred = [d for d in _DIST_M if _DIST_M[d] != _ref_dist]
+        _rows = []
+        for _d in _dist_pred:
+            _dm     = _DIST_M[_d]
+            _t_vdot = _time_from_vdot(_dm, _vdot)
+            _t_rieg = _riegel(_ref_sec, _ref_dist, _dm)
+            _diff   = _t_vdot - _t_rieg          # negativo = VDOT mais rápido
+            _rows.append({
+                "dist_m":  _dm,
+                "Distância": f"{_ICONS.get(_d,'')} {_d}",
+                "VDOT":    _fmt_hms(_t_vdot),
+                "Riegel":  _fmt_hms(_t_rieg),
+                "Δ":       (f"VDOT +{_fmt_hms(abs(_diff))}" if _diff > 5
+                            else f"Riegel +{_fmt_hms(abs(_diff))}" if _diff < -5
+                            else "≈ iguais"),
+                "pace_vdot_sec": _t_vdot / (_dm / 1000),
+                "pace_rieg_sec": _t_rieg / (_dm / 1000),
+            })
+
+        # Cards de previsão VDOT
+        _cols_pred = st.columns(len(_rows))
+        for _ci, _r in zip(_cols_pred, _rows):
+            _ci.metric(_r["Distância"], _r["VDOT"],
+                       f"pace {fmt_pace(_r['pace_vdot_sec'])}/km", delta_color="off")
+
+        # Gráfico comparativo
+        _dist_labels = [_r["Distância"] for _r in _rows]
+        _pace_vdot   = [_r["pace_vdot_sec"] / 60 for _r in _rows]
+        _pace_rieg   = [_r["pace_rieg_sec"] / 60 for _r in _rows]
+        _pf_vdot     = [fmt_pace(_r["pace_vdot_sec"]) for _r in _rows]
+        _pf_rieg     = [fmt_pace(_r["pace_rieg_sec"]) for _r in _rows]
+        _tm_vdot     = [_r["VDOT"]   for _r in _rows]
+        _tm_rieg     = [_r["Riegel"] for _r in _rows]
+
+        _all_paces = [_r["pace_vdot_sec"] for _r in _rows] + \
+                     [_r["pace_rieg_sec"]  for _r in _rows]
+
         fig_pred = go.Figure()
-        fig_pred.add_scatter(x=_cd["Distância"], y=_cd["Pace_min"],
-                             fill="tozeroy", fillcolor="rgba(52,152,219,0.07)",
-                             line=dict(width=0), showlegend=False, hoverinfo="skip")
+
+        # Área de fundo VDOT
         fig_pred.add_scatter(
-            x=_cd["Distância"], y=_cd["Pace_min"],
+            x=_dist_labels, y=_pace_vdot,
+            fill="tozeroy", fillcolor="rgba(46,204,113,0.06)",
+            line=dict(width=0), showlegend=False, hoverinfo="skip")
+
+        # Linha VDOT — principal, verde
+        fig_pred.add_scatter(
+            x=_dist_labels, y=_pace_vdot,
+            name="VDOT (Jack Daniels)",
             mode="lines+markers+text",
-            line=dict(color="#3498DB", width=2.5, shape="spline"),
-            marker=dict(size=[14 if r else 9 for r in _cd["is_ref"]],
-                        color=["#F1C40F" if r else "#3498DB" for r in _cd["is_ref"]],
+            line=dict(color="#2ECC71", width=3, shape="spline"),
+            marker=dict(size=10, color="#2ECC71", line=dict(width=2, color="white")),
+            text=_pf_vdot, textposition="top center", textfont=dict(size=10, color="#2ECC71"),
+            customdata=list(zip(_tm_vdot, _dist_labels)),
+            hovertemplate="<b>%{customdata[1]}</b> — VDOT<br>"
+                          "Tempo: <b>%{customdata[0]}</b><br>"
+                          "Pace: <b>%{text}/km</b><extra></extra>")
+
+        # Linha Riegel — comparativo, azul tracejado
+        fig_pred.add_scatter(
+            x=_dist_labels, y=_pace_rieg,
+            name="Riegel (comparativo)",
+            mode="lines+markers+text",
+            line=dict(color="#3498DB", width=2, dash="dot", shape="spline"),
+            marker=dict(size=8, color="#3498DB", line=dict(width=1.5, color="white")),
+            text=_pf_rieg, textposition="bottom center",
+            textfont=dict(size=9, color="#3498DB"),
+            customdata=list(zip(_tm_rieg, _dist_labels)),
+            hovertemplate="<b>%{customdata[1]}</b> — Riegel<br>"
+                          "Tempo: <b>%{customdata[0]}</b><br>"
+                          "Pace: <b>%{text}/km</b><extra></extra>")
+
+        # Marcador da referência
+        _ref_label = _ref_nome
+        _ref_pace_min = (_ref_sec / (_ref_dist / 1000)) / 60
+        fig_pred.add_scatter(
+            x=[_ref_label] if _ref_label in _dist_labels else [],
+            y=[_ref_pace_min] if _ref_label in _dist_labels else [],
+            mode="markers+text",
+            marker=dict(size=18, color="#F1C40F", symbol="star",
                         line=dict(width=2, color="white")),
-            text=_cd["Pace_fmt"], textposition="top center", textfont=dict(size=10),
-            customdata=_cd[["Tempo","Distância"]].values,
-            hovertemplate="<b>%{customdata[1]}</b><br>Tempo: <b>%{customdata[0]}</b><br>Pace: <b>%{text}/km</b><extra></extra>",
-            showlegend=False)
-        _ref_row = _cd[_cd["is_ref"]]
-        if not _ref_row.empty:
-            fig_pred.add_scatter(x=_ref_row["Distância"], y=_ref_row["Pace_min"],
-                                 mode="markers+text",
-                                 marker=dict(size=16, color="#F1C40F",
-                                             line=dict(width=2, color="white"), symbol="star"),
-                                 text=["⭐ referência"], textposition="bottom center",
-                                 textfont=dict(size=10, color="#F1C40F"),
-                                 showlegend=False, hoverinfo="skip")
-        set_pace_yaxis(fig_pred, _cd["Pace_sec"])
+            text=["⭐ real"], textposition="middle right",
+            textfont=dict(size=10, color="#F1C40F"),
+            showlegend=False, hoverinfo="skip")
+
+        set_pace_yaxis(fig_pred, pd.Series(_all_paces))
         fig_pred.update_layout(
-            title=dict(text=f"Pace predito por distância (ref: {_ref_nome})", font=dict(size=14), x=0),
+            title=dict(
+                text=f"Previsão de pace por distância — VDOT {_vdot:.1f} vs Riegel",
+                font=dict(size=14), x=0),
             xaxis=dict(showgrid=False),
-            yaxis=dict(gridcolor="rgba(128,128,128,0.15)"),
+            yaxis=dict(gridcolor="rgba(128,128,128,0.12)"),
             plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-            margin=dict(t=45, b=10, l=0, r=10))
+            legend=dict(orientation="h", y=-0.18, x=0),
+            margin=dict(t=50, b=10, l=0, r=10),
+            hovermode="x unified")
         st.plotly_chart(fig_pred, width="stretch")
-        st.caption("⭐ = tempo real · demais = estimativas Riegel. Margem maior para distâncias longas.")
+
+        # Tabela diff
+        with st.expander("📊 Comparativo detalhado VDOT vs Riegel"):
+            _df_comp = pd.DataFrame([{
+                "Distância": _r["Distância"],
+                "VDOT (Daniels)": _r["VDOT"],
+                f"pace VDOT": fmt_pace(_r["pace_vdot_sec"]),
+                "Riegel": _r["Riegel"],
+                f"pace Riegel": fmt_pace(_r["pace_rieg_sec"]),
+                "Diferença": _r["Δ"],
+            } for _r in _rows])
+            st.dataframe(_df_comp, hide_index=True, use_container_width=True)
+            st.caption(
+                "**VDOT** modela o sistema aeróbio — mais preciso para 5K+, "
+                "especialmente HM e Maratona. "
+                "**Riegel** é estatístico e tende a ser mais conservador (mais lento) "
+                "em distâncias longas. "
+                "Para 1K e 3K ambos têm alta margem de erro por ser esforço anaeróbio.")
     st.markdown("---")
 
     # ── Evolução melhor pace 5K / 10K ────────────────────────────────────────
@@ -1934,7 +2070,7 @@ with tab_hist:
                 laps_ativ = (lps_run[lps_run["activity_id"] == ativ_selecionada]
                              .sort_values("lap_index").copy())
                 act_info  = df_hv[df_hv["id"] == ativ_selecionada].iloc[0]
-                c1,c2,c3,c4,c5 = st.columns(5)
+                c1, c2, c3, c4, c5 = st.columns(5)
                 c1.metric("📏 Distância",  f"{act_info['distance_km']:.2f} km")
                 c2.metric("⚡ Pace Médio", fmt_pace(act_info["pace_sec_km"]))
                 c3.metric("❤️ FC Média",
