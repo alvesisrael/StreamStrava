@@ -733,161 +733,174 @@ def melhor_3km():
     return _melhor_3km_cached(laps_raw)
 
 
+
 # ══════════════════════════════════════════════════════════════════════════════
-#  ABAS
+#  ABAS  —  5 abas focadas no corredor amador de alto rendimento
 # ══════════════════════════════════════════════════════════════════════════════
-tab_geral, tab_perf, tab_fc, tab_intel, tab_elev, tab_clima, tab_metas, tab_vol, tab_coach, tab_mapa, tab_hist = st.tabs([
-    "📊 Visão Geral","⚡ Performance e Pace","❤️ Frequência Cardíaca",
-    "🧠 Inteligência de Treino","⛰️ Elevação","🌤️ Clima",
-    "🎯 Metas e Benchmarks","📈 Volume e Evolução","🧑‍🏫 Visão Treinador",
-    "🗺️ Mapa de Rotas","📋 Histórico",
+tab_hoje, tab_desemp, tab_carga, tab_mapa, tab_hist = st.tabs([
+    "🏠 Dashboard",
+    "⚡ Desempenho",
+    "💓 Carga & Zonas",
+    "🗺️ Mapa",
+    "📋 Histórico",
 ])
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  1 · VISÃO GERAL
+#  1 · DASHBOARD  —  visão do dia + resumo rápido
 # ══════════════════════════════════════════════════════════════════════════════
-with tab_geral:
-    st.title("📊 Visão Geral")
-    c1,c2,c3 = st.columns(3)
+with tab_hoje:
+    st.title("🏠 Dashboard")
+
+    hoje = pd.Timestamp.now()
+    # ACWR — últimos 7 dias reais (não semana-calendário)
+    ult7d  = _runs_raw[_runs_raw["start_date"] >= hoje - timedelta(days=7)]
+    ult28d = _runs_raw[_runs_raw["start_date"] >= hoje - timedelta(days=28)]
+
+    carga_aguda   = float(ult7d["suffer_score"].sum())  if "suffer_score" in _runs_raw.columns else 0.0
+    carga_cronica = float(ult28d["suffer_score"].sum()) / 4 if "suffer_score" in _runs_raw.columns else 0.0
+    acwr          = round(carga_aguda / carga_cronica, 2) if carga_cronica > 0 else 0.0
+
+    if   acwr < 0.8:  acwr_lbl, acwr_cor = "🟡 Subcarregado",   "normal"
+    elif acwr <= 1.3: acwr_lbl, acwr_cor = "🟢 Zona Segura",    "normal"
+    elif acwr <= 1.5: acwr_lbl, acwr_cor = "🟠 Atenção",        "inverse"
+    else:             acwr_lbl, acwr_cor = "🔴 Alto Risco",      "inverse"
+
+    # TSB atual (do PMC)
+    tsb_at = float(pmc_raw["TSB"].iloc[-1]) if not pmc_raw.empty else 0.0
+    ctl_at = float(pmc_raw["CTL"].iloc[-1]) if not pmc_raw.empty else 0.0
+    if   tsb_at >  20: tsb_lbl = "😴 Descansado"
+    elif tsb_at >= 5:  tsb_lbl = "✅ Forma ideal"
+    elif tsb_at >= -10:tsb_lbl = "⚙️ Treinando"
+    elif tsb_at >= -20:tsb_lbl = "⚠️ Fatigado"
+    else:              tsb_lbl = "🛑 Overtraining"
+
+    km_7d = float(ult7d["distance_km"].sum())
+
+    # Mês corrente
+    mes_run = df_run[df_run["start_date"].dt.to_period("M") == hoje.to_period("M")]
+    km_mes  = float(mes_run["distance_km"].sum())
+    tr_mes  = len(mes_run)
+
+    # ── Cards linha 1: métricas do período filtrado ───────────────────────────
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
     c1.metric("🏃 Atividades",  f"{len(df):,}")
     c2.metric("📏 Distância",   f"{df['distance_km'].sum():,.0f} km")
-    c3.metric("⏱️ Tempo Total", f"{df['moving_time_sec'].sum()/3600:,.1f} h")
-    c4,c5,c6 = st.columns(3)
+    c3.metric("⏱️ Tempo",       f"{df['moving_time_sec'].sum()/3600:,.1f} h")
     c4.metric("⚡ Pace Médio",  fmt_pace(df_run["pace_sec_km"].mean()))
     fc_med = df_run["average_heartrate"].mean()
     c5.metric("❤️ FC Média",   f"{fc_med:.0f} bpm" if not pd.isna(fc_med) else "—")
-    cal = df["calories"].sum()
-    c6.metric("🔥 Calorias",   f"{cal:,.0f} kcal" if df["calories"].notna().any() else "—")
+    c6.metric("🔥 Calorias",   f"{df['calories'].sum():,.0f}" if df["calories"].notna().any() else "—")
+
     st.markdown("---")
 
+    # ── Cards linha 2: forma do dia (all-time, não filtrado) ─────────────────
+    st.caption("**Forma atual** — baseada em todo o histórico (independente do filtro de período)")
+    ca, cb, cc, cd = st.columns(4)
+    ca.metric("⚡ ACWR (7d)",      f"{acwr:.2f}", acwr_lbl, delta_color=acwr_cor)
+    cb.metric("✨ TSB — Forma",     f"{tsb_at:+.0f}", tsb_lbl,
+              delta_color="normal" if tsb_at >= 0 else "inverse")
+    cc.metric("💪 CTL — Fitness",  f"{ctl_at:.0f}", help="Carga crônica 42 dias. Quanto maior, maior a base.")
+    cd.metric("📏 KM últimos 7d",  f"{km_7d:.0f} km")
+
+    # Alert inteligente
+    if acwr > 1.5:
+        st.error("🛑 ACWR crítico — reduza o volume esta semana para evitar lesão.")
+    elif acwr > 1.3:
+        st.warning("⚠️ ACWR elevado — monitore sinais de fadiga.")
+    elif tsb_at < -20:
+        st.error("🛑 TSB muito negativo — risco de overtraining. Priorize recuperação.")
+    elif tsb_at >= 5 and tsb_at <= 20:
+        st.success("✅ Forma em dia — boa janela para treino de qualidade ou competição.")
+    elif acwr < 0.8:
+        st.info("📉 Carga baixa — espaço para aumentar volume com segurança.")
+
+    st.markdown("---")
+
+    # ── Linha visual 1: Mix Intensidade + Distância Mensal ───────────────────
     col_a, col_b = st.columns(2)
-    with col_b:
-        # 🔒 garante estrutura mínima
-        if df is None or df.empty:
-            st.info("Sem dados para calcular intensidade.")
-        else:
-            df_ci = cat_intensity(df)
-
-            if not isinstance(df_ci, pd.DataFrame):
-                st.error("cat_intensity não retornou um DataFrame.")
-                st.stop()
-
-            if "Intensidade" not in df_ci.columns:
-                st.error("Coluna 'Intensidade' não encontrada após processamento.")
-                st.stop()
-
-            # 🔥 normaliza de vez (evita erro silencioso)
-            df_ci["Intensidade"] = (
-                df_ci["Intensidade"]
-                .astype("object")
-                .fillna("Desconhecido")
-                .replace("Nan", "Desconhecido")
-            )
-
-            # 📊 contagem
-            df_i = (
-                df_ci["Intensidade"]
-                .value_counts()
-                .rename_axis("Intensidade")
-                .reset_index(name="Qtd")
-            )
-
-            # mantém só categorias conhecidas
+    with col_a:
+        if "Intensidade" in df.columns and df["Intensidade"].notna().any():
+            df_i = cat_intensity(df)["Intensidade"].value_counts().reset_index()
+            df_i.columns = ["Intensidade","Qtd"]
             df_i = df_i[df_i["Intensidade"].isin(INTENSITY_ORDER)]
+            fig = px.pie(df_i, names="Intensidade", values="Qtd",
+                         title="🎯 Mix de Intensidade", hole=0.45,
+                         color="Intensidade", color_discrete_map=INTENSITY_COLORS,
+                         category_orders={"Intensidade": INTENSITY_ORDER})
+            fig.update_traces(textposition="inside", textinfo="percent+label")
+            fig.update_layout(showlegend=False, margin=dict(t=40,b=0,l=0,r=0))
+            st.plotly_chart(fig, width="stretch")
+    with col_b:
+        df_m = (df.groupby(["MesAnoOrd","MesAno"])
+                  .agg(KM=("distance_km","sum")).reset_index()
+                  .sort_values("MesAnoOrd").tail(12))
+        fig = px.bar(df_m, x="MesAno", y="KM",
+                     title="📏 Distância por Mês (km) — últimos 12 meses",
+                     color_discrete_sequence=[BLUE],
+                     labels={"KM":"km","MesAno":""}, text_auto=".0f")
+        fig.update_traces(textposition="outside")
+        fig.update_layout(xaxis_tickangle=-45, showlegend=False,
+                          margin=dict(t=40,b=0,l=0,r=0))
+        st.plotly_chart(fig, width="stretch")
 
-            if df_i.empty:
-                st.info("Sem dados válidos de intensidade.")
-            else:
-                fig = px.pie(
-                    df_i,
-                    names="Intensidade",
-                    values="Qtd",
-                    title="🎯 Mix de Intensidade",
-                    hole=0.42,
-                    color="Intensidade",
-                    color_discrete_map=INTENSITY_COLORS,
-                    category_orders={"Intensidade": INTENSITY_ORDER}
-                )
+    # ── Linha visual 2: Pace mensal + dias da semana ──────────────────────────
+    col_a, col_b = st.columns(2)
+    with col_a:
+        df_p = (df_run[df_run["pace_sec_km"].notna()]
+                .groupby(["MesAnoOrd","MesAno"])
+                .agg(Pace=("pace_sec_km","mean")).reset_index()
+                .sort_values("MesAnoOrd").tail(12))
+        df_p["Pace_fmt"] = fmt_pace_vec(df_p["Pace"])
+        df_p["Pace_min"] = df_p["Pace"] / 60
+        df_p["Roll3M"]   = df_p["Pace_min"].rolling(3, min_periods=1).mean()
+        fig = go.Figure()
+        fig.add_bar(x=df_p["MesAno"], y=df_p["Pace_min"], name="Pace mensal",
+                    marker_color=BLUE, opacity=0.5,
+                    customdata=df_p[["Pace_fmt"]].values,
+                    hovertemplate="%{x}<br>%{customdata[0]}/km<extra></extra>")
+        fig.add_scatter(x=df_p["MesAno"], y=df_p["Roll3M"], name="Média 3M",
+                        mode="lines+markers", line=dict(color=RED, width=2, dash="dash"))
+        set_pace_yaxis(fig, df_p["Pace"])
+        fig.update_layout(title="⚡ Evolução do Pace + Média 3M",
+                          xaxis_tickangle=-45, margin=dict(t=40,b=0,l=0,r=0))
+        st.plotly_chart(fig, width="stretch")
+        st.caption("📖 Eixo Y invertido: mais alto = mais rápido.")
+    with col_b:
+        df_dia = (df["DiaSemana"].value_counts()
+                  .reindex(DIAS_ORDER_PT).fillna(0).reset_index()
+                  .rename(columns={"DiaSemana":"Dia","count":"Qtd"}))
+        fig = px.bar(df_dia, x="Dia", y="Qtd",
+                     title="📅 Dias mais ativos",
+                     color_discrete_sequence=[PURPLE], text_auto=True)
+        fig.update_layout(showlegend=False, margin=dict(t=40,b=0,l=0,r=0))
+        st.plotly_chart(fig, width="stretch")
 
-                fig.update_traces(textposition="inside", textinfo="percent+label")
-                st.plotly_chart(fig, width="stretch")
-
-            # 📘 explicação
-            label = "🤖 Automática (FC)" if int_mode == "Automática (FC)" else "✍️ Manual"
-
-            with st.expander(f"Como cada categoria é definida? — {label}"):
-                if int_mode == "Automática (FC)":
-                    st.markdown(
-                        "**1ª — Nome da atividade:** palavras-chave têm prioridade.\n\n"
-                        "**2ª — Zonas de FC relativas ao FCmax** (fallback)."
-                    )
-
-                    criterios = {
-                        "🟢 Leve":           "Z1+Z2 ≥ 75%  *(< 78% FCmax)*",
-                        "🔵 Moderado":       "Demais casos",
-                        "🟡 Moderado Firme": "Z4+Z5 ≥ 15% **ou** Z3 ≥ 25%",
-                        "🟠 Forte":          "Z4+Z5 ≥ 30%",
-                        "🔴 Muito Forte":    "Z5 ≥ 20% **ou** Z4+Z5 ≥ 50%",
-                    }
-
-                    for cat, criterio in criterios.items():
-                        st.markdown(f"**{cat}** → {criterio}")
-
-                else:
-                    st.markdown("Modo **Manual** — coluna `Intensidade` preenchida manualmente.")
-
-    df_p = (df_run[df_run["pace_sec_km"].notna()]
-            .groupby(["MesAnoOrd","MesAno"])
-            .agg(Pace=("pace_sec_km","mean")).reset_index()
-            .sort_values("MesAnoOrd"))
-    df_p["Pace_fmt"] = fmt_pace_vec(df_p["Pace"])
-    df_p["Pace_min"] = df_p["Pace"] / 60
-    df_p["Roll3M"]   = df_p["Pace_min"].rolling(3, min_periods=1).mean()
-    fig = go.Figure()
-    fig.add_bar(x=df_p["MesAno"], y=df_p["Pace_min"],
-                name="Pace mensal", marker_color=BLUE, opacity=0.5,
-                customdata=df_p[["Pace_fmt"]].values,
-                hovertemplate="%{x}<br>Pace: %{customdata[0]}/km<extra></extra>")
-    fig.add_scatter(x=df_p["MesAno"], y=df_p["Roll3M"], name="Média 3M",
-                    mode="lines+markers", line=dict(color=RED, width=2, dash="dash"))
-    set_pace_yaxis(fig, df_p["Pace"])
-    fig.update_layout(title="⚡ Evolução do Pace Médio + Média Móvel 3M", xaxis_tickangle=-45)
-    st.plotly_chart(fig, width="stretch")
-    st.caption("📖 Eixo Y invertido: quanto mais alto no gráfico, mais rápido.")
-    if len(df_p) >= 2:
-        last_pace = df_p["Pace_min"].iloc[-1]
-        avg_pace  = df_p["Pace_min"].mean()
-        if last_pace < avg_pace:
-            st.success(f"📈 Pace do último mês ({df_p['Pace_fmt'].iloc[-1]}/km) "
-                       f"abaixo da média histórica ({fmt_pace(avg_pace*60)}/km) — evolução positiva!")
-        else:
-            st.info(f"ℹ️ Pace do último mês ({df_p['Pace_fmt'].iloc[-1]}/km) "
-                    f"acima da média ({fmt_pace(avg_pace*60)}/km).")
-
-    df_dia = (df["DiaSemana"].value_counts()
-              .reindex(DIAS_ORDER_PT).fillna(0)
-              .reset_index().rename(columns={"DiaSemana":"Dia","count":"Qtd"}))
-    fig = px.bar(df_dia, x="Dia", y="Qtd",
-                 title="📅 Atividades por Dia da Semana",
-                 color_discrete_sequence=[PURPLE], text_auto=True)
-    fig.update_layout(showlegend=False)
-    st.plotly_chart(fig, width="stretch")
-
+    # ── Metas do mês (simples) ────────────────────────────────────────────────
+    st.markdown("---")
+    st.subheader("🎯 Metas do Mês")
+    mg1, mg2, mg3, mg4 = st.columns(4)
+    mg1.metric("📏 KM este mês",  f"{km_mes:.0f} km",    f"{km_mes/150*100:.0f}% de 150 km")
+    mg2.metric("🏃 Treinos",      f"{tr_mes}",            f"{tr_mes/16*100:.0f}% de 16")
+    mg3.metric("🥇 Melhor 5K",    melhor_be("5k"))
+    mg4.metric("🥇 Melhor 10K",   melhor_be("10k"))
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  2 · PERFORMANCE E PACE
+#  2 · DESEMPENHO  —  PRs, pace, eficiência, condições
 # ══════════════════════════════════════════════════════════════════════════════
-with tab_perf:
-    st.title("⚡ Performance e Pace")
+with tab_desemp:
+    st.title("⚡ Desempenho")
+
+    # ── Cards de PRs ──────────────────────────────────────────────────────────
     c1,c2,c3,c4,c5 = st.columns(5)
-    c1.metric("🥇 Melhor 3km",   melhor_3km())
-    c2.metric("🥇 Melhor 5K",    melhor_be("5k"))
-    c3.metric("🥇 Melhor 10K",   melhor_be("10k"))
-    c4.metric("🥇 Melhor HM",    melhor_be("half-marathon"), help="HM = Half Marathon · 21,1 km")
-    c5.metric("🏅 PRs Totais",   f"{int(df_run['pr_count'].sum()):,}"
+    c1.metric("🥇 Melhor 3km",  melhor_3km())
+    c2.metric("🥇 Melhor 5K",   melhor_be("5k"))
+    c3.metric("🥇 Melhor 10K",  melhor_be("10k"))
+    c4.metric("🥇 Melhor HM",   melhor_be("half-marathon"), help="Half Marathon 21,1 km")
+    c5.metric("🏅 PRs Totais",  f"{int(df_run['pr_count'].sum()):,}"
                                   if df_run["pr_count"].notna().any() else "—")
     st.markdown("---")
 
+    # ── Evolução melhor pace 5K / 10K ────────────────────────────────────────
     if not be.empty:
         be_sel = be[be["name"].str.lower().isin(["5k","10k"])].copy()
         if not be_sel.empty:
@@ -899,7 +912,8 @@ with tab_perf:
             fig = px.line(be_best, x="MesAno", y="Pace_min", color="name",
                           markers=True, custom_data=["Pace_fmt"],
                           title="📈 Evolução Melhor Pace — 5K e 10K",
-                          color_discrete_map={"5k": RED, "10k": BLUE, "5K": RED, "10K": BLUE},
+                          color_discrete_map={"5k": RED, "10k": BLUE,
+                                              "5K": RED, "10K": BLUE},
                           labels={"Pace_min":"Pace (min/km)","MesAno":"","name":"Distância"})
             fig.update_traces(
                 hovertemplate="<b>%{x}</b><br>Melhor pace: %{customdata[0]}/km<extra></extra>")
@@ -908,650 +922,279 @@ with tab_perf:
             st.plotly_chart(fig, width="stretch")
 
     col_a, col_b = st.columns(2)
+
+    # ── Pace médio por intensidade (bloco principal) ──────────────────────────
     with col_a:
         if "Intensidade" in df_run.columns and not lps_run.empty:
             _mp = (lps_run.groupby("activity_id")
                    .apply(compute_main_laps_pace).dropna().reset_index())
-            _mp.columns = ["id", "pace_main"]
+            _mp.columns = ["id","pace_main"]
             df_run_p = df_run.merge(_mp, on="id", how="left")
             df_run_p["pace_plot"] = df_run_p["pace_main"].fillna(df_run_p["pace_sec_km"])
-            _src = "bloco principal (aquec/desaquec excluídos)"
         else:
             df_run_p = df_run.copy()
             df_run_p["pace_plot"] = df_run_p["pace_sec_km"]
-            _src = "corrida completa"
 
         df_b = cat_intensity(df_run_p[df_run_p["pace_plot"].notna()].copy())
         df_agg = (df_b.groupby("Intensidade", observed=True)["pace_plot"]
                      .agg(Media="mean", DP="std").reset_index().dropna())
-        df_agg["Media_min"] = df_agg["Media"] / 60
-        df_agg["DP_min"]    = df_agg["DP"] / 60
-        df_agg["Label"]     = fmt_pace_vec(df_agg["Media"])
-        df_agg["Cor"]       = df_agg["Intensidade"].map(INTENSITY_COLORS)
-        fig = go.Figure()
-        for _, row in df_agg.iterrows():
-            fig.add_bar(
-                x=[row["Intensidade"]], y=[row["Media_min"]],
-                error_y=dict(type="data", array=[row["DP_min"]], visible=True),
-                marker_color=row["Cor"], name=row["Intensidade"],
-                text=row["Label"], textposition="outside",
-            )
-        set_pace_yaxis(fig, df_agg["Media"])
-        fig.update_layout(title="🎯 Pace Médio por Intensidade", showlegend=False)
-        st.plotly_chart(fig, width="stretch")
-        st.caption(
-            f"Pace do **{_src}**. Laps de aquecimento/desaquecimento "
-            "(>15% mais lentos que a mediana da sessão) são excluídos.")
-    with col_b:
-        df_s = df_run[df_run["pace_sec_km"].notna() & df_run["distance_km"].notna()].copy()
-        df_s["Pace_min"] = df_s["pace_sec_km"] / 60
-        fig = px.scatter(df_s, x="distance_km", y="Pace_min",
-                         title="📍 Pace vs Distância (LOWESS)",
-                         color="Intensidade" if "Intensidade" in df_s.columns else None,
-                         color_discrete_map=INTENSITY_COLORS,
-                         category_orders={"Intensidade": INTENSITY_ORDER},
-                         trendline="lowess", trendline_color_override=RED,
-                         opacity=0.65,
-                         labels={"distance_km":"Distância (km)","Pace_min":"Pace (min/km)"})
-        set_pace_yaxis(fig, df_s["pace_sec_km"])
-        st.plotly_chart(fig, width="stretch")
-
-    df_ef = (df_run[df_run["efficiency_index"].notna()]
-             .groupby(["MesAnoOrd","MesAno"])
-             .agg(Ef=("efficiency_index","mean")).reset_index()
-             .sort_values("MesAnoOrd"))
-    if not df_ef.empty:
-        fig = px.line(df_ef, x="MesAno", y="Ef", markers=True,
-                      title="🧠 Índice de Eficiência Mensal (pace ÷ FC — maior = melhor)",
-                      color_discrete_sequence=[GREEN],
-                      labels={"Ef":"Eficiência","MesAno":""})
-        fig.update_layout(xaxis_tickangle=-45)
-        st.plotly_chart(fig, width="stretch")
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  3 · FREQUÊNCIA CARDÍACA
-# ══════════════════════════════════════════════════════════════════════════════
-with tab_fc:
-    st.title("❤️ Frequência Cardíaca")
-    c1,c2,c3,c4 = st.columns(4)
-    c1.metric("❤️ FC Média",    f"{df_run['average_heartrate'].mean():.0f} bpm"
-                                 if df_run["average_heartrate"].notna().any() else "—")
-    c2.metric("🔴 FC Máx Reg.", f"{df_run['max_heartrate'].max():.0f} bpm"
-                                 if df_run["max_heartrate"].notna().any() else "—")
-    if "weather_temp" in df_run.columns:
-        fc_calor = df_run[df_run["weather_temp"] >= 28]["average_heartrate"].mean()
-        fc_frio  = df_run[df_run["weather_temp"] <= 14]["average_heartrate"].mean()
-        c3.metric("🌡️ FC no Calor (≥28°C)", f"{fc_calor:.0f} bpm" if not pd.isna(fc_calor) else "—")
-        c4.metric("❄️ FC no Frio (≤14°C)",  f"{fc_frio:.0f} bpm"  if not pd.isna(fc_frio)  else "—")
-    st.markdown("---")
-
-    if lps_run.empty:
-        st.info("Dados de laps não disponíveis para este período.")
-    else:
-        col_a, col_b = st.columns(2)
-        with col_a:
-            lps_run["tempo_min"] = lps_run["moving_time_sec"] / 60
-            df_zona = (lps_run.groupby("Zona FC")
-                               .agg(Tempo=("tempo_min","sum")).reset_index())
-            df_zona["Zona FC"] = pd.Categorical(df_zona["Zona FC"], categories=ZONA_ORDER, ordered=True)
-            df_zona = df_zona.sort_values("Zona FC")
-            total_t = df_zona["Tempo"].sum()
-            df_zona["Pct"] = df_zona["Tempo"] / total_t * 100
-            fig = px.bar(df_zona, x="Zona FC", y="Pct",
-                         title="⏱️ % Tempo em Zona FC",
-                         color="Zona FC", color_discrete_map=ZONA_COLORS,
-                         text=df_zona["Pct"].apply(lambda x: f"{x:.1f}%"),
-                         labels={"Pct":"% Tempo","Zona FC":""})
-            fig.update_traces(textposition="outside")
-            fig.update_layout(showlegend=False)
+        if not df_agg.empty:
+            df_agg["Media_min"] = df_agg["Media"] / 60
+            df_agg["DP_min"]    = df_agg["DP"] / 60
+            df_agg["Label"]     = fmt_pace_vec(df_agg["Media"])
+            df_agg["Cor"]       = df_agg["Intensidade"].map(INTENSITY_COLORS)
+            fig = go.Figure()
+            for _, row in df_agg.iterrows():
+                fig.add_bar(x=[row["Intensidade"]], y=[row["Media_min"]],
+                            error_y=dict(type="data", array=[row["DP_min"]], visible=True),
+                            marker_color=row["Cor"], name=row["Intensidade"],
+                            text=row["Label"], textposition="outside")
+            set_pace_yaxis(fig, df_agg["Media"])
+            fig.update_layout(title="🎯 Pace por Tipo de Treino", showlegend=False)
             st.plotly_chart(fig, width="stretch")
-            st.caption("📖 Z1 = regenerativo → Z5 = esforço máximo. Ideal para base: >70% do tempo em Z1+Z2.")
-        with col_b:
-            lps_s    = lps_run.sort_values(["activity_id","lap_index"])
-            first_fc = lps_s.groupby("activity_id")["average_heartrate"].first()
-            last_fc  = lps_s.groupby("activity_id")["average_heartrate"].last()
-            deriv    = (last_fc - first_fc).reset_index()
-            deriv.columns = ["activity_id","drift"]
-            deriv = deriv.merge(
-                df_run[["id","MesAno","MesAnoOrd"]].rename(columns={"id":"activity_id"}),
-                on="activity_id", how="left")
-            df_deriv_m = (deriv.groupby(["MesAnoOrd","MesAno"])
-                               .agg(Deriva=("drift","mean")).reset_index()
-                               .sort_values("MesAnoOrd"))
-            fig = px.line(df_deriv_m, x="MesAno", y="Deriva", markers=True,
-                          title="📈 Deriva Cardíaca Média (bpm — menor = melhor)",
-                          color_discrete_sequence=[RED],
-                          labels={"Deriva":"Δ bpm","MesAno":""})
-            fig.add_hline(y=0,  line_dash="dash", line_color=GRAY)
-            fig.add_hline(y=10, line_dash="dot",  line_color=AMBER, annotation_text="+10 bpm — atenção")
+            st.caption("Pace do bloco principal (aquec/desaquec excluídos). Barra = desvio padrão.")
+
+    # ── Consistência de pace (CV%) ────────────────────────────────────────────
+    with col_b:
+        if not lps_run.empty:
+            def cv_pace(grp):
+                p = grp["pace_sec_km"].dropna()
+                return (p.std() / p.mean() * 100) if len(p) > 1 and p.mean() > 0 else None
+            cv_df = lps_run.groupby("activity_id").apply(cv_pace).dropna().reset_index()
+            cv_df.columns = ["activity_id","CV_Pace"]
+            lps_cv = lps_run.merge(cv_df, on="activity_id")
+            df_cv_m = (lps_cv.groupby(["MesAnoOrd","MesAno"])
+                             .agg(CV=("CV_Pace","mean")).reset_index()
+                             .sort_values("MesAnoOrd"))
+            fig = px.line(df_cv_m, x="MesAno", y="CV", markers=True,
+                          title="🎯 Consistência de Pace por Mês (CV%)",
+                          color_discrete_sequence=[AMBER],
+                          labels={"CV":"CV (%)","MesAno":""})
+            fig.add_hline(y=10, line_dash="dash", line_color=GREEN,
+                          annotation_text="< 10% — ritmo controlado")
+            fig.add_hline(y=25, line_dash="dash", line_color=RED,
+                          annotation_text="> 25% — treino intervalado")
             fig.update_layout(xaxis_tickangle=-45)
             st.plotly_chart(fig, width="stretch")
-            if not df_deriv_m.empty:
-                last_drift = df_deriv_m["Deriva"].iloc[-1]
-                if last_drift > 10:
-                    st.warning("⚠️ Deriva cardíaca alta — sinal de fadiga ou desidratação.")
-                elif last_drift < 5:
-                    st.success("✅ Deriva cardíaca baixa — boa estabilidade cardiovascular.")
+            st.caption("CV < 10%: ritmo uniforme. CV > 25%: sessão de tiros/intervalos.")
 
-        df_fc_m = (df_run[df_run["average_heartrate"].notna()]
-                   .groupby(["MesAnoOrd","MesAno"])
-                   .agg(FC=("average_heartrate","mean")).reset_index()
-                   .sort_values("MesAnoOrd"))
-        fig = px.line(df_fc_m, x="MesAno", y="FC", markers=True,
-                      title="❤️ FC Média por Mês",
-                      color_discrete_sequence=[RED],
-                      labels={"FC":"bpm","MesAno":""})
-        fig.update_layout(xaxis_tickangle=-45)
-        st.plotly_chart(fig, width="stretch")
+    # ── Eficiência Aeróbica Z2 ────────────────────────────────────────────────
+    if not lps_run.empty and "Zona FC" in lps_run.columns:
+        lps_z2 = lps_run[
+            (lps_run["Zona FC"] == "Z2 - Aeróbico") &
+            lps_run["pace_sec_km"].notna() &
+            (lps_run["pace_sec_km"] > 0) &
+            (lps_run["pace_sec_km"] < 480)].copy()
+        if not lps_z2.empty and len(lps_z2["MesAno"].unique()) >= 2:
+            st.markdown("---")
+            st.subheader("🏃 Eficiência Aeróbica — Pace na Zona 2")
+            st.caption(
+                "**O KPI mais honesto de resistência:** o ritmo que você sustenta "
+                "na mesma frequência cardíaca de Z2. Ficou mais rápido na mesma FC = motor maior.")
+            ae_m = (lps_z2.groupby(["MesAnoOrd","MesAno"])
+                          .agg(PaceZ2=("pace_sec_km","mean"), Amostras=("pace_sec_km","count"))
+                          .reset_index().sort_values("MesAnoOrd"))
+            ae_m = ae_m[ae_m["Amostras"] >= 5]
+            if len(ae_m) >= 2:
+                delta_ae = ae_m["PaceZ2"].iloc[0] - ae_m["PaceZ2"].iloc[-1]
+                ae_m["PaceZ2_fmt"] = fmt_pace_vec(ae_m["PaceZ2"])
+                ae_m["PaceZ2_min"] = ae_m["PaceZ2"] / 60
+                ca1, ca2, ca3 = st.columns(3)
+                ca1.metric("Pace Z2 — início",  ae_m["PaceZ2_fmt"].iloc[0]  + "/km")
+                ca2.metric("Pace Z2 — atual",   ae_m["PaceZ2_fmt"].iloc[-1] + "/km")
+                ca3.metric("Ganho aeróbico",    f"{abs(delta_ae):.0f}s/km",
+                           f"+{delta_ae:.0f}s/km mais rápido na mesma FC" if delta_ae > 0
+                           else "Sem melhora ainda",
+                           delta_color="normal" if delta_ae > 0 else "inverse")
+                fig_ae = go.Figure()
+                fig_ae.add_scatter(
+                    x=ae_m["MesAno"], y=ae_m["PaceZ2_min"],
+                    mode="lines+markers+text", text=ae_m["PaceZ2_fmt"],
+                    textposition="top center",
+                    line=dict(color=PURPLE, width=2.5), marker=dict(size=8, color=PURPLE),
+                    fill="tozeroy", fillcolor="rgba(155,89,182,0.07)",
+                    customdata=ae_m["Amostras"].values,
+                    hovertemplate="%{x}<br>Pace Z2: %{text}/km<br>Laps: %{customdata}<extra></extra>")
+                set_pace_yaxis(fig_ae, ae_m["PaceZ2"])
+                fig_ae.update_layout(title="Pace médio em Z2 por mês  (↓ = motor aeróbico maior)",
+                                     xaxis_tickangle=-45, showlegend=False)
+                st.plotly_chart(fig_ae, width="stretch")
+                if   delta_ae >= 15: st.success(f"🚀 +{delta_ae:.0f}s/km mais rápido na mesma FC de Z2!")
+                elif delta_ae > 0:   st.info(f"📈 Melhora de +{delta_ae:.0f}s/km. Continue o volume fácil.")
+                else:                st.warning("⚠️ Eficiência Z2 estável ou em queda. Verifique excesso de Z3.")
 
-        # ── Distribuição de Zonas vs Modelo Polarizado ───────────────────────
-        st.markdown("---")
-        st.subheader("🎯 Distribuição de Zonas vs Modelo Polarizado")
-        lz = lps_run.copy()
-        lz["tempo_min"] = lz["moving_time_sec"] / 60
-        df_zona_atual = (lz.groupby("Zona FC").agg(Tempo=("tempo_min","sum")).reset_index())
-        df_zona_atual["Zona FC"] = pd.Categorical(df_zona_atual["Zona FC"], categories=ZONA_ORDER, ordered=True)
-        df_zona_atual = df_zona_atual.sort_values("Zona FC")
-        tot_z = df_zona_atual["Tempo"].sum()
-        df_zona_atual["Pct"] = (df_zona_atual["Tempo"] / tot_z * 100).round(1)
-
-        IDEAL_ZONA = {"Sem FC":0.0,"Z1 - Regenerativo":35.0,"Z2 - Aeróbico":45.0,
-                      "Z3 - Tempo":5.0,"Z4 - Limiar":10.0,"Z5 - VO2max":5.0}
-        df_zona_ideal = pd.DataFrame([{"Zona FC":z,"Pct":p} for z,p in IDEAL_ZONA.items() if p > 0])
-        df_zona_ideal["Zona FC"] = pd.Categorical(df_zona_ideal["Zona FC"], categories=ZONA_ORDER, ordered=True)
-        df_zona_ideal = df_zona_ideal.sort_values("Zona FC")
-
-        z12_at = df_zona_atual[df_zona_atual["Zona FC"].isin(["Z1 - Regenerativo","Z2 - Aeróbico"])]["Pct"].sum()
-        z3_at  = df_zona_atual[df_zona_atual["Zona FC"] == "Z3 - Tempo"]["Pct"].sum()
-        z45_at = df_zona_atual[df_zona_atual["Zona FC"].isin(["Z4 - Limiar","Z5 - VO2max"])]["Pct"].sum()
-        pol_idx = round((z12_at + z45_at - z3_at * 2) / 100, 2)
-
-        cm1,cm2,cm3,cm4 = st.columns(4)
-        cm1.metric("🟢 Z1+Z2 (fácil)",    f"{z12_at:.0f}%", f"{z12_at-80:+.0f}pp vs ideal 80%", delta_color="normal")
-        cm2.metric("🟡 Z3 zona cinza",     f"{z3_at:.0f}%",  f"{z3_at-5:+.0f}pp vs ideal 5%",   delta_color="inverse")
-        cm3.metric("🔴 Z4+Z5 (intenso)",   f"{z45_at:.0f}%", f"{z45_at-15:+.0f}pp vs ideal 15%",delta_color="normal")
-        cm4.metric("📊 Índice de Polarização", f"{pol_idx:.2f}",
-                   help="(Z1+Z2 + Z4+Z5 − 2×Z3) / 100. Próximo de 1 = bem polarizado.")
-
-        col_p1, col_p2 = st.columns(2)
-        with col_p1:
-            fig_at = px.pie(df_zona_atual[df_zona_atual["Pct"]>0], names="Zona FC", values="Pct",
-                            title="Distribuição atual", hole=0.5,
-                            color="Zona FC", color_discrete_map=ZONA_COLORS,
-                            category_orders={"Zona FC": ZONA_ORDER})
-            fig_at.update_traces(textinfo="percent+label", textposition="inside")
-            fig_at.update_layout(showlegend=False)
-            st.plotly_chart(fig_at, width="stretch")
-        with col_p2:
-            fig_id = px.pie(df_zona_ideal[df_zona_ideal["Pct"]>0], names="Zona FC", values="Pct",
-                            title="Modelo polarizado ideal", hole=0.5,
-                            color="Zona FC", color_discrete_map=ZONA_COLORS,
-                            category_orders={"Zona FC": ZONA_ORDER})
-            fig_id.update_traces(textinfo="percent+label", textposition="inside")
-            fig_id.update_layout(showlegend=False)
-            st.plotly_chart(fig_id, width="stretch")
-
-        st.caption("📖 **Modelo polarizado (Seiler):** ~80% em Z1+Z2, ~5% em Z3 (zona cinza — evitar), ~15% em Z4+Z5.")
-        if z3_at > 20:
-            st.warning(f"⚠️ {z3_at:.0f}% em Z3 (zona cinza) — quatro vezes o ideal.")
-        elif z3_at > 10:
-            st.warning(f"⚠️ {z3_at:.0f}% em Z3. Tente redistribuir para Z1+Z2.")
-        elif z12_at < 65:
-            st.warning(f"⚠️ Apenas {z12_at:.0f}% em Z1+Z2. Adicione mais volume aeróbico fácil.")
-        elif z12_at >= 75:
-            st.success(f"✅ {z12_at:.0f}% em Z1+Z2 — boa base aeróbica.")
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  4 · INTELIGÊNCIA DE TREINO
-# ══════════════════════════════════════════════════════════════════════════════
-with tab_intel:
-    st.title("🧠 Inteligência de Treino")
-    if lps_run.empty:
-        st.info("Dados de laps não disponíveis.")
-    else:
-        def cv_pace(grp):
-            p = grp["pace_sec_km"].dropna()
-            return (p.std() / p.mean() * 100) if len(p) > 1 and p.mean() > 0 else None
-
-        cv_df = lps_run.groupby("activity_id").apply(cv_pace).dropna().reset_index()
-        cv_df.columns = ["activity_id","CV_Pace"]
-        cv_medio = cv_df["CV_Pace"].mean()
-
-        c1,c2,c3,c4 = st.columns(4)
-        c1.metric("🎯 Consistência (CV%)", f"{cv_medio:.1f}%" if not pd.isna(cv_medio) else "—",
-                  help="< 10% = ritmo controlado | > 25% = intervalado")
-        c2.metric("📊 Laps / Atividade",   f"{lps_run.groupby('activity_id').size().mean():.1f}")
-        elev = lps_run["total_elevation_gain"].mean()
-        c3.metric("⛰️ Elev. Média / Lap",  f"{elev:.1f} m" if not pd.isna(elev) else "—")
-        c4.metric("💓 FC Média nos Laps",  f"{lps_run['average_heartrate'].mean():.0f} bpm"
-                  if lps_run["average_heartrate"].notna().any() else "—")
-        st.markdown("---")
-
-        col_a, col_b = st.columns(2)
-        with col_a:
-            recent_ids = (lps_run.sort_values("start_date", ascending=False)
-                          ["activity_id"].unique()[:10])
-            df_box = lps_run[lps_run["activity_id"].isin(recent_ids)].copy()
-            df_box = df_box[df_box["pace_sec_km"].notna() &
-                            (df_box["pace_sec_km"] > 0) &
-                            (df_box["pace_sec_km"] <= 500)]
-            act_info = lps_run.drop_duplicates("activity_id")[["activity_id","start_date"]].copy()
-            act_info["Label"] = act_info["start_date"].dt.strftime("%d/%m")
-            df_box = df_box.merge(act_info[["activity_id","Label"]], on="activity_id", how="left")
-            df_agg2 = (df_box.groupby(["activity_id","Label"])["pace_sec_km"]
-                             .agg(Media="mean", DP="std").reset_index().dropna()
-                             .sort_values("activity_id").tail(10))
-            df_agg2["Media_min"] = df_agg2["Media"] / 60
-            df_agg2["DP_min"]    = df_agg2["DP"] / 60
-            df_agg2["PaceLabel"] = fmt_pace_vec(df_agg2["Media"])
-            fig = go.Figure(go.Bar(
-                x=df_agg2["Label"], y=df_agg2["Media_min"],
-                error_y=dict(type="data", array=df_agg2["DP_min"].tolist(), visible=True),
-                marker_color=BLUE, text=df_agg2["PaceLabel"], textposition="outside",
-            ))
-            set_pace_yaxis(fig, df_agg2["Media"])
-            fig.update_layout(title="📅 Pace Médio — 10 Treinos Mais Recentes",
-                              xaxis=dict(tickangle=-30))
-            st.plotly_chart(fig, width="stretch")
-            st.caption("Uma barra por treino. Traço = variação interna (desvio padrão).")
-        with col_b:
-            df_hist = lps_run[lps_run["pace_sec_km"].notna() &
-                              (lps_run["pace_sec_km"] > 0) &
-                              (lps_run["pace_sec_km"] <= 480)].copy()
-            df_hist["Pace_min"] = df_hist["pace_sec_km"] / 60
-            fig = px.histogram(df_hist, x="Pace_min", nbins=35,
-                               title="📊 Distribuição de Pace — Todos os Laps (até 8:00/km)",
-                               color_discrete_sequence=[PURPLE],
-                               labels={"Pace_min":"Pace (min/km)"})
-            fig.update_yaxes(title="Nº de Laps")
-            st.plotly_chart(fig, width="stretch")
-            st.caption("Laps > 8:00/km excluídos.")
-
-        lps_cv = lps_run.merge(cv_df, on="activity_id")
-        df_cv_m = (lps_cv.groupby(["MesAnoOrd","MesAno"])
-                         .agg(CV=("CV_Pace","mean")).reset_index()
-                         .sort_values("MesAnoOrd"))
-        fig = px.line(df_cv_m, x="MesAno", y="CV", markers=True,
-                      title="🎯 Consistência de Pace por Mês (CV%)",
-                      color_discrete_sequence=[AMBER],
-                      labels={"CV":"CV (%)","MesAno":""})
-        fig.add_hline(y=10, line_dash="dash", line_color=GREEN, annotation_text="< 10% — ritmo controlado")
-        fig.add_hline(y=25, line_dash="dash", line_color=RED,   annotation_text="> 25% — treino intervalado")
-        fig.update_layout(xaxis_tickangle=-45)
-        st.plotly_chart(fig, width="stretch")
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  5 · ELEVAÇÃO
-# ══════════════════════════════════════════════════════════════════════════════
-with tab_elev:
-    st.title("⛰️ Elevação")
-    df_e = df_run[df_run["elevation_gain"].notna() & (df_run["elevation_gain"] > 0)].copy()
-    if df_e.empty:
-        st.info("Nenhum dado de elevação disponível para o período selecionado.")
-    else:
-        df_e["elev_km"] = df_e["elevation_gain"] / df_e["distance_km"]
-        c1,c2,c3,c4,c5 = st.columns(5)
-        c1.metric("⛰️ Elevação Total",    f"{df_e['elevation_gain'].sum():,.0f} m")
-        c2.metric("📈 Maior Subida",       f"{df_e['elevation_gain'].max():.0f} m")
-        c3.metric("📏 Elevação Média/Run", f"{df_e['elevation_gain'].mean():.0f} m")
-        c4.metric("📐 Gradiente Médio",    f"{df_e['elev_km'].mean():.1f} m/km",
-                  help="Metros de subida por km percorrido. 10 m/km ≈ 1% de inclinação média.")
-        c5.metric("🏔️ Runs c/ >300m",     f"{len(df_e[df_e['elevation_gain']>=300])}")
-        st.markdown("---")
-
-        col_a, col_b = st.columns(2)
-        with col_a:
-            df_em = (df_e.groupby(["MesAnoOrd","MesAno"])
-                         .agg(Elev=("elevation_gain","sum")).reset_index()
-                         .sort_values("MesAnoOrd"))
-            fig = px.bar(df_em, x="MesAno", y="Elev",
-                         title="📅 Elevação Total por Mês (m)",
-                         color_discrete_sequence=[AMBER],
-                         labels={"Elev":"metros","MesAno":""}, text_auto=".0f")
-            fig.update_traces(textposition="outside")
-            fig.update_layout(xaxis_tickangle=-45, showlegend=False)
-            st.plotly_chart(fig, width="stretch")
-        with col_b:
-            fig = px.histogram(df_e, x="elevation_gain", nbins=30,
-                               title="📊 Distribuição de Elevação por Atividade",
-                               color_discrete_sequence=[AMBER],
-                               labels={"elevation_gain":"Elevação (m)"})
-            fig.update_yaxes(title="Nº de Atividades")
-            st.plotly_chart(fig, width="stretch")
-
-        col_a, col_b = st.columns(2)
-        with col_a:
-            df_pe = df_e[df_e["pace_sec_km"].notna()].copy()
-            df_pe["Pace_min"] = df_pe["pace_sec_km"] / 60
-            fig = px.scatter(df_pe, x="elevation_gain", y="Pace_min",
-                             title="📍 Pace vs Elevação",
-                             trendline="lowess", trendline_color_override=RED, opacity=0.65,
-                             color="Intensidade" if "Intensidade" in df_pe.columns else None,
-                             color_discrete_map=INTENSITY_COLORS,
-                             category_orders={"Intensidade": INTENSITY_ORDER},
-                             labels={"elevation_gain":"Elevação (m)","Pace_min":"Pace (min/km)"})
-            set_pace_yaxis(fig, df_pe["pace_sec_km"])
-            st.plotly_chart(fig, width="stretch")
-        with col_b:
-            df_fe = df_e[df_e["average_heartrate"].notna()].copy()
-            fig = px.scatter(df_fe, x="elevation_gain", y="average_heartrate",
-                             title="❤️ FC Média vs Elevação",
-                             trendline="lowess", trendline_color_override=RED, opacity=0.65,
-                             color="Intensidade" if "Intensidade" in df_fe.columns else None,
-                             color_discrete_map=INTENSITY_COLORS,
-                             category_orders={"Intensidade": INTENSITY_ORDER},
-                             labels={"elevation_gain":"Elevação (m)","average_heartrate":"FC Média (bpm)"})
-            st.plotly_chart(fig, width="stretch")
-
-        top10 = df_e.nlargest(10, "elevation_gain")[
-            ["start_date","name","distance_km","elevation_gain","elev_km","pace_sec_km"]].copy()
-        top10["Data"]      = top10["start_date"].dt.strftime("%d/%m/%Y")
-        top10["Pace"]      = fmt_pace_vec(top10["pace_sec_km"])
-        top10["Elev/km"]   = top10["elev_km"].apply(lambda x: f"{x:.1f} m/km")
-        top10["Distância"] = top10["distance_km"].apply(lambda x: f"{x:.1f} km")
-        top10["Elevação"]  = top10["elevation_gain"].apply(lambda x: f"{x:.0f} m")
-        st.markdown("### 🏔️ Top 10 Atividades com Maior Elevação")
-        st.dataframe(top10[["Data","name","Distância","Elevação","Elev/km","Pace"]]
-                        .rename(columns={"name":"Atividade"}),
-                     hide_index=True, use_container_width=True)
-
-        if "Intensidade" in df_e.columns:
-            df_ei = (cat_intensity(df_e)
-                     .groupby("Intensidade", observed=True)
-                     .agg(ElevTotal=("elevation_gain","sum"),
-                          ElevMedia=("elevation_gain","mean"),
-                          Qtd=("id","count")).reset_index())
-            col_a, col_b = st.columns(2)
-            with col_a:
-                fig = px.bar(df_ei, x="Intensidade", y="ElevTotal",
-                             title="⛰️ Elevação Total por Tipo de Treino",
-                             color="Intensidade", color_discrete_map=INTENSITY_COLORS,
-                             category_orders={"Intensidade": INTENSITY_ORDER},
-                             text=df_ei["ElevTotal"].apply(lambda x: f"{x:.0f}m"),
-                             labels={"ElevTotal":"metros","Intensidade":""})
-                fig.update_traces(textposition="outside")
-                fig.update_layout(showlegend=False)
+    # ── Condições externas (expander) ─────────────────────────────────────────
+    with st.expander("🌤️ Impacto do Clima no Pace"):
+        df_w = df_run[df_run["weather_temp"].notna()].copy() \
+               if "weather_temp" in df_run.columns else pd.DataFrame()
+        if df_w.empty:
+            st.info("Dados de clima não disponíveis.")
+        else:
+            col_cl1, col_cl2 = st.columns(2)
+            with col_cl1:
+                df_w["Pace_min"] = df_w["pace_sec_km"] / 60
+                fig = px.scatter(df_w, x="weather_temp", y="Pace_min",
+                                 title="Pace vs Temperatura",
+                                 trendline="lowess", trendline_color_override=RED,
+                                 opacity=0.6,
+                                 labels={"weather_temp":"°C","Pace_min":"Pace (min/km)"})
+                fig.update_yaxes(autorange="reversed")
+                fig.add_vrect(x0=15, x1=26, fillcolor=GREEN, opacity=0.07,
+                              annotation_text="Confortável")
                 st.plotly_chart(fig, width="stretch")
-            with col_b:
-                fig = px.bar(df_ei, x="Intensidade", y="ElevMedia",
-                             title="📐 Elevação Média por Atividade e Tipo",
-                             color="Intensidade", color_discrete_map=INTENSITY_COLORS,
-                             category_orders={"Intensidade": INTENSITY_ORDER},
-                             text=df_ei["ElevMedia"].apply(lambda x: f"{x:.0f}m"),
-                             labels={"ElevMedia":"metros","Intensidade":""})
+            with col_cl2:
+                if "weather_rain" in df_w.columns:
+                    pace_chuva = df_w[df_w["weather_rain"] > 0]["pace_sec_km"].mean()
+                    pace_seco  = df_w[df_w["weather_rain"] == 0]["pace_sec_km"].mean()
+                    r1, r2, r3 = st.columns(3)
+                    r1.metric("☀️ Sem chuva",   fmt_pace(pace_seco))
+                    r2.metric("🌧️ Com chuva",   fmt_pace(pace_chuva))
+                    if not (pd.isna(pace_chuva) or pd.isna(pace_seco)):
+                        delta = pace_chuva - pace_seco
+                        r3.metric("Δ impacto",
+                                  f"+{delta:.0f}s/km" if delta > 0 else f"{delta:.0f}s/km")
+                bins   = [0,14,18,24,28,50]
+                labels = ["≤14°C","15–18°C","18–24°C","24–28°C","≥28°C"]
+                df_w["Faixa"] = pd.cut(df_w["weather_temp"], bins=bins, labels=labels)
+                df_f = (df_w.groupby("Faixa", observed=True)
+                            .agg(Pace=("pace_sec_km","mean")).reset_index())
+                df_f["Pace_fmt"] = fmt_pace_vec(df_f["Pace"])
+                df_f["Pace_min"] = df_f["Pace"] / 60
+                fig = px.bar(df_f, x="Faixa", y="Pace_min",
+                             title="Pace por Temperatura",
+                             color="Faixa", text="Pace_fmt",
+                             labels={"Faixa":"","Pace_min":"Pace (min/km)"})
+                set_pace_yaxis(fig, df_f["Pace"].dropna())
                 fig.update_traces(textposition="outside")
                 fig.update_layout(showlegend=False)
                 st.plotly_chart(fig, width="stretch")
 
-        df_grad = (df_e.groupby(["MesAnoOrd","MesAno"])
-                       .agg(Grad=("elev_km","mean")).reset_index()
-                       .sort_values("MesAnoOrd"))
-        fig = px.line(df_grad, x="MesAno", y="Grad", markers=True,
-                      title="📈 Gradiente Médio por Mês (m/km)",
-                      color_discrete_sequence=[AMBER],
-                      labels={"Grad":"m/km","MesAno":""})
-        fig.update_layout(xaxis_tickangle=-45)
-        st.plotly_chart(fig, width="stretch")
-
+    with st.expander("⛰️ Análise de Elevação"):
+        df_e = df_run[df_run["elevation_gain"].notna() & (df_run["elevation_gain"] > 0)].copy()
+        if df_e.empty:
+            st.info("Nenhum dado de elevação disponível.")
+        else:
+            df_e["elev_km"] = df_e["elevation_gain"] / df_e["distance_km"]
+            ec1,ec2,ec3,ec4 = st.columns(4)
+            ec1.metric("⛰️ Elevação Total",    f"{df_e['elevation_gain'].sum():,.0f} m")
+            ec2.metric("📈 Maior Subida",       f"{df_e['elevation_gain'].max():.0f} m")
+            ec3.metric("📐 Gradiente Médio",    f"{df_e['elev_km'].mean():.1f} m/km")
+            ec4.metric("🏔️ Runs >300m",        f"{len(df_e[df_e['elevation_gain']>=300])}")
+            col_e1, col_e2 = st.columns(2)
+            with col_e1:
+                df_pe = df_e[df_e["pace_sec_km"].notna()].copy()
+                df_pe["Pace_min"] = df_pe["pace_sec_km"] / 60
+                fig = px.scatter(df_pe, x="elevation_gain", y="Pace_min",
+                                 title="Pace vs Elevação",
+                                 trendline="lowess", trendline_color_override=RED,
+                                 opacity=0.65,
+                                 labels={"elevation_gain":"Elevação (m)","Pace_min":"Pace (min/km)"})
+                set_pace_yaxis(fig, df_pe["pace_sec_km"])
+                st.plotly_chart(fig, width="stretch")
+            with col_e2:
+                top10 = df_e.nlargest(10,"elevation_gain")[
+                    ["start_date","name","distance_km","elevation_gain","elev_km","pace_sec_km"]].copy()
+                top10["Data"]     = top10["start_date"].dt.strftime("%d/%m/%Y")
+                top10["Pace"]     = fmt_pace_vec(top10["pace_sec_km"])
+                top10["Elev/km"]  = top10["elev_km"].apply(lambda x: f"{x:.1f}")
+                top10["Distância"]= top10["distance_km"].apply(lambda x: f"{x:.1f} km")
+                top10["Elevação"] = top10["elevation_gain"].apply(lambda x: f"{x:.0f} m")
+                st.markdown("**Top 10 atividades com maior elevação**")
+                st.dataframe(top10[["Data","name","Distância","Elevação","Elev/km","Pace"]]
+                               .rename(columns={"name":"Atividade"}),
+                             hide_index=True, use_container_width=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  6 · CLIMA
+#  3 · CARGA & ZONAS  —  gestão de carga + fisiologia cardíaca
 # ══════════════════════════════════════════════════════════════════════════════
-with tab_clima:
-    st.title("🌤️ Clima e Condições")
-    df_w = df_run[df_run["weather_temp"].notna()].copy() \
-           if "weather_temp" in df_run.columns else pd.DataFrame()
-    if df_w.empty:
-        st.warning("Dados de clima não disponíveis para o período selecionado.")
+with tab_carga:
+    st.title("💓 Carga & Zonas")
+
+    hoje_c = pd.Timestamp.now()
+
+    # ── PMC — CTL / ATL / TSB histórico ──────────────────────────────────────
+    st.subheader("📊 Performance Management Chart")
+    st.caption(
+        "**CTL** (42d) = fitness acumulado · "
+        "**ATL** (7d) = fadiga recente · "
+        "**TSB** = CTL − ATL · Janela de pico: TSB entre +5 e +20")
+
+    if not pmc_raw.empty:
+        pmc_filt = pmc_raw[
+            (pd.to_datetime(pmc_raw["Data"]) >= s_dt) &
+            (pd.to_datetime(pmc_raw["Data"]) <= e_dt)].copy()
+        if not pmc_filt.empty:
+            pmc_filt["Semana"] = pd.to_datetime(pmc_filt["Data"]).dt.to_period("W").apply(
+                lambda x: x.start_time)
+            pmc_w  = pmc_filt.groupby("Semana").last().reset_index()
+            ctl_at = pmc_w["CTL"].iloc[-1] if len(pmc_w) else 0
+            atl_at = pmc_w["ATL"].iloc[-1] if len(pmc_w) else 0
+            tsb_at2= pmc_w["TSB"].iloc[-1] if len(pmc_w) else 0
+            cp1,cp2,cp3 = st.columns(3)
+            cp1.metric("💪 CTL — Fitness", f"{ctl_at:.0f}")
+            cp2.metric("😓 ATL — Fadiga",  f"{atl_at:.0f}")
+            cp3.metric("✨ TSB — Forma",   f"{tsb_at2:+.0f}",
+                       delta=("✅ Pico" if 5<=tsb_at2<=20 else "⚠️ Fatigado" if tsb_at2<-15 else "OK"),
+                       delta_color="normal" if tsb_at2>=0 else "inverse")
+            fig_pmc = go.Figure()
+            fig_pmc.add_scatter(x=pmc_w["Semana"], y=pmc_w["CTL"], name="CTL — fitness",
+                                mode="lines", line=dict(color=BLUE, width=2.5),
+                                fill="tozeroy", fillcolor="rgba(52,152,219,0.08)")
+            fig_pmc.add_scatter(x=pmc_w["Semana"], y=pmc_w["ATL"], name="ATL — fadiga",
+                                mode="lines", line=dict(color=RED, width=2, dash="dot"))
+            fig_pmc.add_scatter(x=pmc_w["Semana"], y=pmc_w["TSB"], name="TSB — forma",
+                                mode="lines+markers", line=dict(color=GREEN, width=2),
+                                marker=dict(size=4), yaxis="y2")
+            fig_pmc.add_hline(y=0, line_color=GRAY, line_dash="dash", line_width=1, yref="y2")
+            fig_pmc.add_hrect(y0=5, y1=20, fillcolor=GREEN, opacity=0.06, line_width=0,
+                              yref="y2", annotation_text="Janela de forma",
+                              annotation_position="top right")
+            fig_pmc.update_layout(
+                title="CTL · ATL · TSB — semana a semana",
+                yaxis=dict(title="CTL / ATL"),
+                yaxis2=dict(title="TSB", overlaying="y", side="right",
+                            showgrid=False, zeroline=False),
+                legend=dict(orientation="h", y=-0.18), hovermode="x unified")
+            st.plotly_chart(fig_pmc, width="stretch")
+            if   tsb_at2 > 20:    st.info("😴 Descansado — boa janela para qualidade ou competição.")
+            elif tsb_at2 >= 5:    st.success("✅ Forma ideal (+5 a +20).")
+            elif tsb_at2 >= -10:  st.info("⚙️ Treinando normalmente. Monitore a fadiga.")
+            elif tsb_at2 >= -20:  st.warning("⚠️ Fadiga acumulada. Considere um dia leve.")
+            else:                  st.error("🛑 Risco de overtraining. Reduza a carga.")
     else:
-        n_chuva   = int((df_w["weather_rain"] > 0).sum()) if "weather_rain" in df_w.columns else 0
-        pct_chuva = n_chuva / len(df_w) * 100
-        n_ideal   = len(df_w[(df_w["weather_temp"] >= 18) & (df_w["weather_temp"] <= 24)])
-        pct_ideal = n_ideal / len(df_w) * 100
-        c1,c2,c3,c4,c5 = st.columns(5)
-        c1.metric("🌡️ Temp Média",        f"{df_w['weather_temp'].mean():.1f} °C")
-        c2.metric("🌧️ Treinos c/ Chuva",  f"{n_chuva} ({pct_chuva:.0f}%)")
-        c3.metric("✅ Temp Ideal 18–24°C", f"{pct_ideal:.0f}%")
-        c4.metric("💧 Umidade Média",      f"{df_w['weather_humidity'].mean():.0f}%"
-                  if "weather_humidity" in df_w.columns else "—")
-        c5.metric("💨 Vento Médio",        f"{df_w['weather_wind_speed'].mean():.1f} km/h"
-                  if "weather_wind_speed" in df_w.columns else "—")
-        st.markdown("---")
+        st.info("PMC indisponível (coluna `suffer_score` ausente ou vazia).")
 
-        col_a, col_b = st.columns(2)
-        with col_a:
-            df_w["Pace_min"] = df_w["pace_sec_km"] / 60
-            fig = px.scatter(df_w, x="weather_temp", y="Pace_min",
-                             title="🌡️ Pace vs Temperatura (LOWESS)",
-                             trendline="lowess", trendline_color_override=RED, opacity=0.6,
-                             color="Intensidade" if "Intensidade" in df_w.columns else None,
-                             color_discrete_map=INTENSITY_COLORS,
-                             category_orders={"Intensidade": INTENSITY_ORDER},
-                             labels={"weather_temp":"Temperatura (°C)","Pace_min":"Pace (min/km)"})
-            fig.update_yaxes(autorange="reversed")
-            fig.add_vrect(x0=15, x1=26, fillcolor=GREEN, opacity=0.07, annotation_text="Confortável")
-            st.plotly_chart(fig, width="stretch")
-        with col_b:
-            bins   = [0,14,18,24,28,50]
-            labels = ["≤14°C (frio)","15–18°C","18–24°C","24–28°C","≥28°C (calor)"]
-            df_w["Faixa"] = pd.cut(df_w["weather_temp"], bins=bins, labels=labels)
-            df_f = (df_w.groupby("Faixa", observed=True)
-                        .agg(Pace=("pace_sec_km","mean"), Qtd=("id","count")).reset_index())
-            df_f["Pace_fmt"] = fmt_pace_vec(df_f["Pace"])
-            df_f["Pace_min"] = df_f["Pace"] / 60
-            fig = px.bar(df_f, x="Faixa", y="Pace_min",
-                         title="📊 Pace Médio por Faixa de Temperatura",
-                         color="Faixa", text="Pace_fmt",
-                         labels={"Faixa":"","Pace_min":"Pace (min/km)"})
-            set_pace_yaxis(fig, df_f["Pace"].dropna())
-            fig.update_traces(textposition="outside")
-            fig.update_layout(showlegend=False)
-            st.plotly_chart(fig, width="stretch")
-
-        if "weather_rain" in df_w.columns:
-            pace_chuva = df_w[df_w["weather_rain"] > 0]["pace_sec_km"].mean()
-            pace_seco  = df_w[df_w["weather_rain"] == 0]["pace_sec_km"].mean()
-            c1,c2,c3 = st.columns(3)
-            c1.metric("🌧️ Pace na Chuva",  fmt_pace(pace_chuva))
-            c2.metric("☀️ Pace Sem Chuva", fmt_pace(pace_seco))
-            if not (pd.isna(pace_chuva) or pd.isna(pace_seco)):
-                delta = pace_chuva - pace_seco
-                c3.metric("Δ Impacto da Chuva",
-                          f"+{delta:.0f}s/km" if delta > 0 else f"{delta:.0f}s/km")
-                if delta > 15:
-                    st.warning(f"🌧️ Chuva impacta significativamente — +{delta:.0f}s/km.")
-                elif delta <= 5:
-                    st.success("💪 Ótima resiliência na chuva — impacto mínimo no pace.")
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  7 · METAS E BENCHMARKS
-# ══════════════════════════════════════════════════════════════════════════════
-with tab_metas:
-    st.title("🎯 Metas e Benchmarks")
-    hoje    = pd.Timestamp.now()
-    mes_run = df_run[df_run["start_date"].dt.to_period("M") == hoje.to_period("M")]
-    km_mes  = mes_run["distance_km"].sum()
-    tr_mes  = len(mes_run)
-    c1,c2,c3,c4 = st.columns(4)
-    c1.metric("📏 KM este Mês",      f"{km_mes:.0f} km", f"{km_mes/150*100:.0f}% meta 150km")
-    c2.metric("🏃 Treinos este Mês", f"{tr_mes}",        f"{tr_mes/16*100:.0f}% meta 16 treinos")
-    c3.metric("🥇 Melhor 5K",        melhor_be("5k"))
-    c4.metric("🥇 Melhor 10K",       melhor_be("10k"))
     st.markdown("---")
 
-    if not be.empty:
-        col_a, col_b = st.columns(2)
-        with col_a:
-            be_ev = be[be["name"].str.lower().isin(["5k","10k","1k"])].copy()
-            if not be_ev.empty:
-                be_ev_m = (be_ev.groupby(["MesAnoOrd","MesAno","name"])
-                                .agg(Pace=("pace_sec_km","min")).reset_index()
-                                .sort_values("MesAnoOrd"))
-                be_ev_m["Pace_fmt"] = fmt_pace_vec(be_ev_m["Pace"])
-                be_ev_m["Pace_min"] = be_ev_m["Pace"] / 60
-                fig = px.line(be_ev_m, x="MesAno", y="Pace_min", color="name",
-                              markers=True, custom_data=["Pace_fmt"],
-                              title="📈 Evolução dos Melhores Esforços",
-                              labels={"Pace_min":"Pace (min/km)","MesAno":"","name":"Distância"})
-                fig.update_traces(
-                    hovertemplate="<b>%{x}</b><br>Melhor pace: %{customdata[0]}/km<extra></extra>")
-                set_pace_yaxis(fig, be_ev_m["Pace"])
-                fig.update_layout(xaxis_tickangle=-45)
-                st.plotly_chart(fig, use_container_width=True, key="fig_be_evolucao")
-        with col_b:
-            pr_df = be[be["pr_rank"].notna()]
-            if not pr_df.empty:
-                pr_count = pr_df["name"].value_counts().reset_index()
-                pr_count.columns = ["Distância","PRs"]
-                fig = px.bar(pr_count, x="Distância", y="PRs",
-                             title="🏅 PRs Conquistados por Distância",
-                             color_discrete_sequence=[AMBER], text_auto=True)
-                fig.update_layout(showlegend=False)
-                st.plotly_chart(fig, use_container_width=True, key="fig_prs")
+    # ── ACWR histórico + Variação de carga ───────────────────────────────────
+    st.subheader("⚡ ACWR — Acute:Chronic Workload Ratio")
+    st.caption(
+        "Compara esforço dos últimos 7 dias com a média das 4 semanas anteriores. "
+        "**Zona segura: 0,8 – 1,3.** Acima de 1,5 = alto risco de lesão.")
 
-    df_meta = (df_run.groupby(["MesAnoOrd","MesAno"])
-                     .agg(KM=("distance_km","sum"), Treinos=("id","count"))
-                     .reset_index().sort_values("MesAnoOrd").tail(12))
-    df_meta["PctKM"]      = (df_meta["KM"] / 150 * 100).clip(upper=120)
-    df_meta["PctTreinos"] = (df_meta["Treinos"] / 16 * 100).clip(upper=120)
-    fig = go.Figure()
-    fig.add_bar(x=df_meta["MesAno"], y=df_meta["PctKM"],
-                name="% Meta 150km", marker_color=BLUE,
-                text=df_meta["KM"].apply(lambda x: f"{x:.0f}km"), textposition="outside")
-    fig.add_bar(x=df_meta["MesAno"], y=df_meta["PctTreinos"],
-                name="% Meta 16 treinos", marker_color=GREEN,
-                text=df_meta["Treinos"], textposition="outside")
-    fig.add_hline(y=100, line_dash="dash", line_color=AMBER, annotation_text="Meta 100%")
-    fig.update_layout(barmode="group", title="📊 % Metas Mensais — últimos 12 meses",
-                      yaxis_title="%", xaxis_tickangle=-45)
-    st.plotly_chart(fig, use_container_width=True, key="fig_metas_mensais")
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  8 · VOLUME E EVOLUÇÃO
-# ══════════════════════════════════════════════════════════════════════════════
-with tab_vol:
-    st.title("📈 Volume e Evolução")
-    col_a, col_b = st.columns(2)
-    with col_a:
-        df_acum = (df_run.sort_values("start_date")
-                         .assign(KM_Acum=lambda x: x["distance_km"].cumsum()))
-        fig = px.area(df_acum, x="start_date", y="KM_Acum",
-                      title="📏 Distância Acumulada",
-                      color_discrete_sequence=[BLUE],
-                      labels={"start_date":"","KM_Acum":"km"})
-        st.plotly_chart(fig, width="stretch")
-    with col_b:
-        df_sem = (df_run.groupby(["Semana","SemanaStr"])
-                        .agg(KM=("distance_km","sum")).reset_index()
-                        .sort_values("Semana").tail(24))
-        fig = px.bar(df_sem, x="SemanaStr", y="KM",
-                     title="📅 Volume Semanal — últimas 24 semanas",
-                     color_discrete_sequence=[PURPLE], text_auto=".0f",
-                     labels={"SemanaStr":"","KM":"km"})
-        fig.update_layout(xaxis_tickangle=-45, showlegend=False)
-        st.plotly_chart(fig, width="stretch")
-
-    if "Intensidade" in df_run.columns:
-        df_int_m = cat_intensity(
-            df_run.groupby(["MesAnoOrd","MesAno","Intensidade"])
-                  .agg(KM=("distance_km","sum")).reset_index()
-                  .sort_values("MesAnoOrd"))
-        fig = px.bar(df_int_m, x="MesAno", y="KM", color="Intensidade",
-                     title="🎯 Volume por Intensidade e Mês",
-                     color_discrete_map=INTENSITY_COLORS,
-                     category_orders={"Intensidade": INTENSITY_ORDER},
-                     labels={"KM":"km","MesAno":"","Intensidade":"Intensidade"})
-        fig.update_layout(xaxis_tickangle=-45)
-        st.plotly_chart(fig, width="stretch")
-
-    df_mom = (df_run.groupby(["MesAnoOrd","MesAno"])
-                    .agg(KM=("distance_km","sum")).reset_index()
-                    .sort_values("MesAnoOrd"))
-    df_mom["Δ%"] = df_mom["KM"].pct_change() * 100
-    df_mom["cor"] = df_mom["Δ%"].apply(
-        lambda x: RED if not pd.isna(x) and x < -10
-        else AMBER if not pd.isna(x) and x > 30
-        else GREEN if not pd.isna(x) else GRAY)
-    fig = go.Figure(go.Bar(
-        x=df_mom["MesAno"], y=df_mom["Δ%"], marker_color=df_mom["cor"],
-        text=df_mom["Δ%"].apply(lambda x: f"{x:+.0f}%" if not pd.isna(x) else ""),
-        textposition="outside"))
-    fig.add_hline(y=0,   line_color=GRAY, line_dash="dash")
-    fig.add_hline(y=30,  line_color=AMBER, line_dash="dot", annotation_text="+30% — risco overload")
-    fig.add_hline(y=-10, line_color=AMBER, line_dash="dot")
-    fig.update_layout(title="📊 Crescimento de Volume MoM (%)", yaxis_title="%", xaxis_tickangle=-45)
-    st.plotly_chart(fig, width="stretch")
-    st.caption("**MoM = Month over Month** — variação de quilometragem em relação ao mês anterior. "
-               "Verde = crescimento moderado · Vermelho = queda ou salto excessivo (>30% é risco de lesão).")
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  9 · VISÃO TREINADOR
-# ══════════════════════════════════════════════════════════════════════════════
-with tab_coach:
-    st.title("🧑‍🏫 Visão Treinador")
-    hoje  = pd.Timestamp.now()
-    _inicio_semana = (hoje - timedelta(days=hoje.weekday())).replace(
-        hour=0, minute=0, second=0, microsecond=0)
-    ult7  = _runs_raw[_runs_raw["start_date"] >= _inicio_semana]
-    ult28 = _runs_raw[_runs_raw["start_date"] >= hoje - timedelta(days=28)]
-
-    carga_aguda   = ult7["suffer_score"].sum()  if "suffer_score" in df_run.columns else 0
-    carga_cronica = ult28["suffer_score"].sum() / 4 if "suffer_score" in df_run.columns else 0
-    acwr          = carga_aguda / carga_cronica if carga_cronica > 0 else 0
-
-    if   acwr < 0.8:  zona_r, cor_r = "🟡 Subcarregado",   AMBER
-    elif acwr <= 1.3: zona_r, cor_r = "🟢 Zona Segura",    GREEN
-    elif acwr <= 1.5: zona_r, cor_r = "🟠 Risco Moderado", "#E67E22"
-    else:             zona_r, cor_r = "🔴 Alto Risco",      RED
-
-    if "Intensidade" in df_run.columns:
-        leves    = df_run["Intensidade"].isin(["Leve","Moderado"]).sum()
-        intensos = df_run["Intensidade"].isin(["Forte","Muito Forte"]).sum()
-        ratio_li = f"{leves}:{intensos}"
-    else:
-        ratio_li = "—"
-
-    c1,c2,c3,c4,c5 = st.columns(5)
-    c1.metric("⚡ ACWR",               f"{acwr:.2f}", zona_r)
-    c2.metric("🔥 Carga Aguda 7d",     f"{carga_aguda:.0f}")
-    c3.metric("📊 Carga Crônica 28d",  f"{carga_cronica:.0f}")
-    c4.metric("🎯 Ratio Leve:Intenso", ratio_li,
-              help="Proporção de treinos fáceis/moderados vs. fortes/muito fortes. Ideal: 4:1.")
-    c5.metric("📏 KM esta semana",     f"{ult7['distance_km'].sum():.0f} km",
-              help="Quilometragem de segunda-feira a hoje (semana actual do calendário).")
-    st.caption("📖 **ACWR:** compara esforço dos últimos 7d com a média das 4 semanas. "
-               "Entre 0,8 e 1,3 = equilíbrio seguro. Acima de 1,5 = risco elevado de lesão.")
-
-    if   acwr > 1.5: st.warning("⚠️ ACWR acima de 1,5 — alto risco. Reduza o volume esta semana.")
-    elif acwr > 1.3: st.warning("🟠 ACWR entre 1,3 e 1,5 — zona de atenção.")
-    elif acwr < 0.8: st.info("📉 ACWR abaixo de 0,8 — espaço para aumentar volume com segurança.")
-    else:            st.success("✅ ACWR dentro da zona segura (0,8–1,3).")
-    st.markdown("---")
-
-    col_a, col_b = st.columns(2)
-    with col_a:
+    col_ac1, col_ac2 = st.columns(2)
+    with col_ac1:
         if df_run["suffer_score"].notna().any():
             weekly = (df_run[df_run["suffer_score"].notna()]
                       .set_index("start_date")["suffer_score"].resample("W").sum())
             acwr_df = pd.DataFrame({"Carga": weekly}).reset_index()
             acwr_df.columns = ["Semana","Carga"]
-            acwr_df["Aguda"]   = acwr_df["Carga"].rolling(1).sum()
-            acwr_df["Cronica"] = acwr_df["Carga"].rolling(4).mean()
-            acwr_df["ACWR"]    = (acwr_df["Aguda"] / acwr_df["Cronica"]).replace([float("inf")], None)
+            # ACWR correto: rolling(1) / rolling(4).mean() por semana
+            acwr_df["ATL_w"]  = acwr_df["Carga"].rolling(1).sum()
+            acwr_df["CTL_w"]  = acwr_df["Carga"].rolling(4).mean()
+            acwr_df["ACWR"]   = (acwr_df["ATL_w"] / acwr_df["CTL_w"]).replace([float("inf")], None)
             acwr_df = acwr_df.dropna(subset=["ACWR"])
             fig = px.line(acwr_df, x="Semana", y="ACWR", markers=True,
-                          title="⚡ ACWR Histórico por Semana",
+                          title="ACWR Histórico",
                           color_discrete_sequence=[BLUE], labels={"ACWR":"Ratio","Semana":""})
             fig.add_hrect(y0=0.8, y1=1.3, fillcolor=GREEN, opacity=0.08,
-                          annotation_text="Zona Segura (0.8–1.3)")
-            fig.add_hline(y=1.5, line_dash="dash", line_color=RED, annotation_text="Risco Alto (1.5)")
+                          annotation_text="Zona Segura")
+            fig.add_hline(y=1.5, line_dash="dash", line_color=RED,
+                          annotation_text="Risco Alto")
             st.plotly_chart(fig, width="stretch")
-    with col_b:
+        else:
+            st.info("Coluna `suffer_score` não disponível.")
+    with col_ac2:
         if df_run["suffer_score"].notna().any():
             df_carga = (df_run[df_run["suffer_score"].notna()]
                         .groupby(["Semana","SemanaStr"])
@@ -1565,158 +1208,158 @@ with tab_coach:
                 marker_color=df_carga["cor"],
                 text=df_carga["Δ%"].apply(lambda x: f"{x:+.0f}%" if not pd.isna(x) else ""),
                 textposition="outside"))
-            fig.add_hline(y=10,  line_dash="dash", line_color=AMBER, annotation_text="±10% limite seguro")
+            fig.add_hline(y=10,  line_dash="dash", line_color=AMBER,
+                          annotation_text="±10% limite seguro")
             fig.add_hline(y=-10, line_dash="dash", line_color=AMBER)
-            fig.update_layout(title="📊 Variação de Carga Semanal (%)",
+            fig.update_layout(title="Variação de Carga Semanal (%)",
                               xaxis_tickangle=-45, yaxis_title="%")
             st.plotly_chart(fig, width="stretch")
 
-    df_fc8 = (df_run[df_run["average_heartrate"].notna()]
-              .groupby(["Semana","SemanaStr"])
-              .agg(FC=("average_heartrate","mean")).reset_index()
-              .sort_values("Semana").tail(8))
-    if not df_fc8.empty:
-        tend = ("📈 Subindo — possível fadiga acumulada"
-                if df_fc8["FC"].iloc[-1] > df_fc8["FC"].iloc[0]
-                else "📉 Caindo — boa adaptação cardiovascular"
-                if df_fc8["FC"].iloc[-1] < df_fc8["FC"].iloc[0]
-                else "➡️ Estável")
-        st.info(f"**Tendência FC (últimas 8 semanas):** {tend}")
-        fig = px.line(df_fc8, x="SemanaStr", y="FC", markers=True,
-                      title="❤️ FC Média — Últimas 8 Semanas",
-                      color_discrete_sequence=[RED], labels={"FC":"bpm","SemanaStr":""})
-        fig.update_layout(xaxis_tickangle=-45)
+    # ── Volume semanal e MoM ──────────────────────────────────────────────────
+    st.markdown("---")
+    col_v1, col_v2 = st.columns(2)
+    with col_v1:
+        df_sem = (df_run.groupby(["Semana","SemanaStr"])
+                        .agg(KM=("distance_km","sum")).reset_index()
+                        .sort_values("Semana").tail(24))
+        fig = px.bar(df_sem, x="SemanaStr", y="KM",
+                     title="📅 Volume Semanal — últimas 24 semanas",
+                     color_discrete_sequence=[PURPLE], text_auto=".0f",
+                     labels={"SemanaStr":"","KM":"km"})
+        fig.update_layout(xaxis_tickangle=-45, showlegend=False)
         st.plotly_chart(fig, width="stretch")
+    with col_v2:
+        df_mom = (df_run.groupby(["MesAnoOrd","MesAno"])
+                        .agg(KM=("distance_km","sum")).reset_index()
+                        .sort_values("MesAnoOrd"))
+        df_mom["Δ%"] = df_mom["KM"].pct_change() * 100
+        df_mom["cor"] = df_mom["Δ%"].apply(
+            lambda x: RED   if not pd.isna(x) and x < -10
+            else AMBER if not pd.isna(x) and x > 30
+            else GREEN if not pd.isna(x) else GRAY)
+        fig = go.Figure(go.Bar(
+            x=df_mom["MesAno"], y=df_mom["Δ%"], marker_color=df_mom["cor"],
+            text=df_mom["Δ%"].apply(lambda x: f"{x:+.0f}%" if not pd.isna(x) else ""),
+            textposition="outside"))
+        fig.add_hline(y=0,  line_color=GRAY, line_dash="dash")
+        fig.add_hline(y=30, line_color=AMBER, line_dash="dot",
+                      annotation_text="+30% — risco overload")
+        fig.update_layout(title="📊 Crescimento MoM (%)", yaxis_title="%",
+                          xaxis_tickangle=-45)
+        st.plotly_chart(fig, width="stretch")
+        st.caption("MoM = Month over Month. >30% aumenta risco de lesão.")
 
-    # ── PMC — CTL / ATL / TSB ──────────────────────────────────────────────
-    if not pmc_raw.empty:
-        st.markdown("---")
-        st.subheader("📊 Performance Management Chart — CTL · ATL · TSB")
-        st.caption(
-            "**CTL** (42d): condicionamento acumulado. "
-            "**ATL** (7d): fadiga recente. "
-            "**TSB** = CTL − ATL. TSB +5 a +20 = janela de pico de forma.")
-        pmc_filt = pmc_raw[
-            (pd.to_datetime(pmc_raw["Data"]) >= s_dt) &
-            (pd.to_datetime(pmc_raw["Data"]) <= e_dt)].copy()
-        if not pmc_filt.empty:
-            pmc_filt["Semana"] = pd.to_datetime(pmc_filt["Data"]).dt.to_period("W").apply(
-                lambda x: x.start_time)
-            pmc_w  = pmc_filt.groupby("Semana").last().reset_index()
-            ctl_at = pmc_w["CTL"].iloc[-1] if len(pmc_w) else 0
-            atl_at = pmc_w["ATL"].iloc[-1] if len(pmc_w) else 0
-            tsb_at = pmc_w["TSB"].iloc[-1] if len(pmc_w) else 0
-            cp1,cp2,cp3 = st.columns(3)
-            cp1.metric("💪 CTL (fitness)", f"{ctl_at:.0f}", help="Carga crônica 42 dias.")
-            cp2.metric("😓 ATL (fadiga)",  f"{atl_at:.0f}", help="Carga aguda 7 dias.")
-            cp3.metric("✨ TSB (forma)",   f"{tsb_at:+.0f}",
-                       delta=("Pico de forma ✅" if 5 <= tsb_at <= 20
-                              else "Fatigado ⚠️" if tsb_at < -15 else "OK"),
-                       delta_color="normal" if tsb_at >= 0 else "inverse")
-            fig_pmc = go.Figure()
-            fig_pmc.add_scatter(x=pmc_w["Semana"], y=pmc_w["CTL"], name="CTL — fitness",
-                                mode="lines", line=dict(color=BLUE, width=2.5),
-                                fill="tozeroy", fillcolor="rgba(52,152,219,0.08)")
-            fig_pmc.add_scatter(x=pmc_w["Semana"], y=pmc_w["ATL"], name="ATL — fadiga",
-                                mode="lines", line=dict(color=RED, width=2, dash="dot"))
-            fig_pmc.add_scatter(x=pmc_w["Semana"], y=pmc_w["TSB"], name="TSB — forma",
-                                mode="lines+markers", line=dict(color=GREEN, width=2),
-                                marker=dict(size=4), yaxis="y2")
-            fig_pmc.add_hline(y=0, line_color=GRAY, line_dash="dash", line_width=1, yref="y2")
-            fig_pmc.add_hrect(y0=5, y1=20, fillcolor=GREEN, opacity=0.06, line_width=0, yref="y2",
-                              annotation_text="Janela de forma", annotation_position="top right")
-            fig_pmc.update_layout(
-                title="CTL · ATL · TSB — semana a semana",
-                yaxis=dict(title="CTL / ATL"),
-                yaxis2=dict(title="TSB (forma)", overlaying="y", side="right",
-                            showgrid=False, zeroline=False),
-                legend=dict(orientation="h", y=-0.18),
-                hovermode="x unified")
-            st.plotly_chart(fig_pmc, width="stretch")
-            if   tsb_at > 20:   st.info("😴 TSB alto — atleta descansado. Boa janela para qualidade ou competição.")
-            elif tsb_at >= 5:   st.success("✅ TSB na janela ideal (+5 a +20). Forma em dia.")
-            elif tsb_at >= -10: st.info("⚙️ TSB neutro — treinando normalmente.")
-            elif tsb_at >= -20: st.warning("⚠️ TSB negativo — fadiga acumulada. Considere recuperação.")
-            else:               st.error("🛑 TSB muito negativo — risco de overtraining. Reduza a carga.")
+    # ── Zonas FC ──────────────────────────────────────────────────────────────
+    st.markdown("---")
+    st.subheader("❤️ Zonas de Frequência Cardíaca")
 
-    # ── Polarização ──────────────────────────────────────────────────────────
-    if not lps_run.empty and "Zona FC" in lps_run.columns:
-        st.markdown("---")
-        st.subheader("🎯 Perfil de Polarização — período selecionado")
-        lz2 = lps_run.copy()
-        lz2["tempo_min"] = lz2["moving_time_sec"] / 60
-        dz2 = lz2.groupby("Zona FC").agg(Tempo=("tempo_min","sum")).reset_index()
-        dz2["Zona FC"] = pd.Categorical(dz2["Zona FC"], categories=ZONA_ORDER, ordered=True)
-        dz2 = dz2.sort_values("Zona FC")
-        tot2 = dz2["Tempo"].sum()
-        dz2["Pct_atual"] = (dz2["Tempo"] / tot2 * 100).round(1)
-        ideal_v = {"Sem FC":0,"Z1 - Regenerativo":35,"Z2 - Aeróbico":45,
-                   "Z3 - Tempo":5,"Z4 - Limiar":10,"Z5 - VO2max":5}
-        dz2["Pct_ideal"] = dz2["Zona FC"].map(ideal_v).fillna(0)
-        fig_pol = go.Figure()
-        fig_pol.add_bar(x=dz2["Zona FC"], y=dz2["Pct_atual"], name="Atual",
-                        marker_color=[ZONA_COLORS.get(str(z), GRAY) for z in dz2["Zona FC"]],
-                        text=dz2["Pct_atual"].apply(lambda x: f"{x:.0f}%"),
-                        textposition="outside", opacity=0.85)
-        fig_pol.add_scatter(x=dz2["Zona FC"], y=dz2["Pct_ideal"],
-                            name="Ideal (polarizado)", mode="markers+lines",
-                            line=dict(color=GRAY, width=1.5, dash="dash"),
-                            marker=dict(size=9, color=GRAY))
-        fig_pol.update_layout(title="% Tempo em Zona — Atual vs Ideal Polarizado",
-                              yaxis_title="% do tempo",
-                              legend=dict(orientation="h", y=-0.15))
-        st.plotly_chart(fig_pol, width="stretch")
-        st.caption("📖 Linha tracejada = modelo polarizado ideal (Seiler).")
+    if lps_run.empty:
+        st.info("Dados de laps não disponíveis para análise de zonas.")
+    else:
+        col_z1, col_z2 = st.columns(2)
+        with col_z1:
+            lps_run["tempo_min"] = lps_run["moving_time_sec"] / 60
+            df_zona = (lps_run.groupby("Zona FC")
+                               .agg(Tempo=("tempo_min","sum")).reset_index())
+            df_zona["Zona FC"] = pd.Categorical(df_zona["Zona FC"],
+                                                 categories=ZONA_ORDER, ordered=True)
+            df_zona = df_zona.sort_values("Zona FC")
+            total_t = df_zona["Tempo"].sum()
+            df_zona["Pct"] = df_zona["Tempo"] / total_t * 100
 
-    # ── Eficiência Aeróbica — pace em Z2 ─────────────────────────────────────
-    if not lps_run.empty and "Zona FC" in lps_run.columns:
-        lps_z2 = lps_run[
-            (lps_run["Zona FC"] == "Z2 - Aeróbico") &
-            lps_run["pace_sec_km"].notna() &
-            (lps_run["pace_sec_km"] > 0) &
-            (lps_run["pace_sec_km"] < 480)].copy()
-        if not lps_z2.empty and len(lps_z2["MesAno"].unique()) >= 2:
-            st.markdown("---")
-            st.subheader("🏃 Eficiência Aeróbica — Pace na Zona 2")
-            st.caption("O **KPI mais honesto** para desenvolvimento de resistência.")
-            ae_m = (lps_z2.groupby(["MesAnoOrd","MesAno"])
-                          .agg(PaceZ2=("pace_sec_km","mean"), Amostras=("pace_sec_km","count"))
-                          .reset_index().sort_values("MesAnoOrd"))
-            ae_m = ae_m[ae_m["Amostras"] >= 5]
-            if len(ae_m) >= 2:
-                delta_ae = ae_m["PaceZ2"].iloc[0] - ae_m["PaceZ2"].iloc[-1]
-                ae_m["PaceZ2_fmt"] = fmt_pace_vec(ae_m["PaceZ2"])
-                ae_m["PaceZ2_min"] = ae_m["PaceZ2"] / 60
-                ca1,ca2,ca3 = st.columns(3)
-                ca1.metric("Pace Z2 — início", ae_m["PaceZ2_fmt"].iloc[0]  + "/km")
-                ca2.metric("Pace Z2 — atual",  ae_m["PaceZ2_fmt"].iloc[-1] + "/km")
-                ca3.metric(
-                    "Ganho aeróbico" if delta_ae > 0 else "Variação aeróbica",
-                    f"{'+' if delta_ae > 0 else '-'}{abs(delta_ae):.0f}s/km",
-                    f"+{delta_ae:.0f}s/km mais rápido na mesma FC" if delta_ae > 0 else f"Regressão de {abs(delta_ae):.0f}s/km",
-                    delta_color="normal" if delta_ae > 0 else "inverse"
-                )
-                fig_ae = go.Figure()
-                fig_ae.add_scatter(
-                    x=ae_m["MesAno"], y=ae_m["PaceZ2_min"],
-                    mode="lines+markers+text",
-                    text=ae_m["PaceZ2_fmt"], textposition="top center",
-                    line=dict(color=PURPLE, width=2.5), marker=dict(size=8, color=PURPLE),
-                    fill="tozeroy", fillcolor="rgba(155,89,182,0.07)",
-                    customdata=ae_m["Amostras"].values,
-                    hovertemplate="%{x}<br>Pace Z2: %{text}/km<br>Laps: %{customdata}<extra></extra>")
-                set_pace_yaxis(fig_ae, ae_m["PaceZ2"])
-                fig_ae.update_layout(title="Pace médio em Z2 por mês  (↓ = motor aeróbico maior)",
-                                     xaxis_tickangle=-45, showlegend=False)
-                st.plotly_chart(fig_ae, width="stretch")
-                if   delta_ae >= 15: st.success(f"🚀 Ganho aeróbico real: +{delta_ae:.0f}s/km na mesma FC de Z2.")
-                elif delta_ae > 0:   st.info(f"📈 Melhora de +{delta_ae:.0f}s/km. Consistência e paciência.")
-                else:                st.warning("⚠️ Eficiência aeróbica estável ou em queda.")
+            # Cálculo de polarização
+            z12 = df_zona[df_zona["Zona FC"].isin(["Z1 - Regenerativo","Z2 - Aeróbico"])]["Pct"].sum()
+            z3  = df_zona[df_zona["Zona FC"] == "Z3 - Tempo"]["Pct"].sum()
+            z45 = df_zona[df_zona["Zona FC"].isin(["Z4 - Limiar","Z5 - VO2max"])]["Pct"].sum()
+
+            fig = px.bar(df_zona, x="Zona FC", y="Pct",
+                         title="⏱️ % Tempo em Zona FC",
+                         color="Zona FC", color_discrete_map=ZONA_COLORS,
+                         text=df_zona["Pct"].apply(lambda x: f"{x:.1f}%"),
+                         labels={"Pct":"% Tempo","Zona FC":""})
+            fig.update_traces(textposition="outside")
+            fig.update_layout(showlegend=False)
+            st.plotly_chart(fig, width="stretch")
+
+            # Métricas de polarização abaixo do gráfico
+            pm1, pm2, pm3 = st.columns(3)
+            pm1.metric("🟢 Z1+Z2 (fácil)", f"{z12:.0f}%",
+                       f"{z12-80:+.0f}pp vs ideal 80%", delta_color="normal")
+            pm2.metric("🟡 Z3 (cinza)",    f"{z3:.0f}%",
+                       f"{z3-5:+.0f}pp vs ideal 5%",   delta_color="inverse")
+            pm3.metric("🔴 Z4+Z5 (intenso)",f"{z45:.0f}%",
+                       f"{z45-15:+.0f}pp vs ideal 15%",delta_color="normal")
+
+            if z3 > 15:
+                st.warning(f"⚠️ {z3:.0f}% em Z3 (zona cinza). "
+                           "Reduza para Z2 ou suba para Z4 — evite o meio-termo.")
+            elif z12 >= 75:
+                st.success(f"✅ {z12:.0f}% em Z1+Z2 — boa base aeróbica (modelo Seiler).")
+
+        with col_z2:
+            # Pie ideal vs atual lado a lado
+            IDEAL_ZONA = {"Z1 - Regenerativo":35,"Z2 - Aeróbico":45,
+                          "Z3 - Tempo":5,"Z4 - Limiar":10,"Z5 - VO2max":5}
+            df_z_ideal = pd.DataFrame([{"Zona FC":z,"Pct":p}
+                                       for z,p in IDEAL_ZONA.items()])
+            df_z_ideal["Zona FC"] = pd.Categorical(df_z_ideal["Zona FC"],
+                                                   categories=ZONA_ORDER, ordered=True)
+            fig2 = px.pie(df_z_ideal, names="Zona FC", values="Pct",
+                          title="Modelo polarizado ideal (Seiler)",
+                          hole=0.5, color="Zona FC", color_discrete_map=ZONA_COLORS,
+                          category_orders={"Zona FC": ZONA_ORDER})
+            fig2.update_traces(textinfo="percent+label", textposition="inside")
+            fig2.update_layout(showlegend=False)
+            st.plotly_chart(fig2, width="stretch")
+            st.caption(
+                "📖 **Modelo Seiler:** ~80% fácil (Z1+Z2), ~5% cinza (Z3 — evitar), "
+                "~15% intenso (Z4+Z5). Z3 é fisiol. cara sem desenvolver base ou velocidade.")
+
+        # Deriva cardíaca e FC mensal
+        col_d1, col_d2 = st.columns(2)
+        with col_d1:
+            lps_s    = lps_run.sort_values(["activity_id","lap_index"])
+            first_fc = lps_s.groupby("activity_id")["average_heartrate"].first()
+            last_fc  = lps_s.groupby("activity_id")["average_heartrate"].last()
+            deriv    = (last_fc - first_fc).reset_index()
+            deriv.columns = ["activity_id","drift"]
+            deriv = deriv.merge(
+                df_run[["id","MesAno","MesAnoOrd"]].rename(columns={"id":"activity_id"}),
+                on="activity_id", how="left")
+            df_deriv_m = (deriv.groupby(["MesAnoOrd","MesAno"])
+                               .agg(Deriva=("drift","mean")).reset_index()
+                               .sort_values("MesAnoOrd"))
+            fig = px.line(df_deriv_m, x="MesAno", y="Deriva", markers=True,
+                          title="📈 Deriva Cardíaca Média (bpm)",
+                          color_discrete_sequence=[RED],
+                          labels={"Deriva":"Δ bpm","MesAno":""})
+            fig.add_hline(y=0,  line_dash="dash", line_color=GRAY)
+            fig.add_hline(y=10, line_dash="dot",  line_color=AMBER,
+                          annotation_text="+10 bpm — atenção")
+            fig.update_layout(xaxis_tickangle=-45)
+            st.plotly_chart(fig, width="stretch")
+            st.caption("Deriva alta (>10 bpm) = sinal de fadiga ou desidratação.")
+        with col_d2:
+            df_fc_m = (df_run[df_run["average_heartrate"].notna()]
+                       .groupby(["MesAnoOrd","MesAno"])
+                       .agg(FC=("average_heartrate","mean")).reset_index()
+                       .sort_values("MesAnoOrd"))
+            if not df_fc_m.empty:
+                tend = ("📈 Subindo" if df_fc_m["FC"].iloc[-1] > df_fc_m["FC"].iloc[0]
+                        else "📉 Caindo" if df_fc_m["FC"].iloc[-1] < df_fc_m["FC"].iloc[0]
+                        else "➡️ Estável")
+                fig = px.line(df_fc_m, x="MesAno", y="FC", markers=True,
+                              title=f"❤️ FC Média por Mês — {tend}",
+                              color_discrete_sequence=[RED],
+                              labels={"FC":"bpm","MesAno":""})
+                fig.update_layout(xaxis_tickangle=-45)
+                st.plotly_chart(fig, width="stretch")
+                st.caption("FC em queda na mesma intensidade = adaptação cardiovascular positiva.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  HELPER: constrói HTML do mapa Folium — CACHEADO por seleção + tile
-#  Coloca fora do with tab_mapa para o cache funcionar entre reruns.
+#  4 · MAPA  — rotas com análise por lap (bloco mantido)
+# ══════════════════════════════════════════════════════════════════════════════
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _haversine_km(c1, c2):
@@ -2060,24 +1703,30 @@ with tab_mapa:
 # ══════════════════════════════════════════════════════════════════════════════
 #  11 · HISTÓRICO
 # ══════════════════════════════════════════════════════════════════════════════
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  5 · HISTÓRICO  — log de atividades + detalhes por lap
+# ══════════════════════════════════════════════════════════════════════════════
 with tab_hist:
-    st.title("📋 Histórico de Corridas")
+    st.title("📋 Histórico")
+
     if df_run.empty:
-        st.info("Nenhuma atividade encontrada para o período selecionado.")
+        st.info("Nenhuma atividade no período selecionado.")
     else:
         busca = st.text_input("🔍 Buscar por nome",
                               placeholder="ex: regenerativo, prova, longo...")
         df_hv = df_run.copy()
         if busca:
             df_hv = df_hv[df_hv["name"].str.contains(busca, case=False, na=False)]
-        st.caption(f"{len(df_hv)} atividades no período")
+        st.caption(f"{len(df_hv)} atividades")
 
+        # Timeline
         df_sc = df_hv[df_hv["pace_sec_km"].notna()].copy()
         df_sc["Pace_fmt"]  = fmt_pace_vec(df_sc["pace_sec_km"])
         df_sc["Pace_min"]  = df_sc["pace_sec_km"] / 60
         df_sc["Tempo_fmt"] = (df_sc["moving_time_sec"] / 60).apply(
-            lambda x: f"{int(x//60)}h{int(x%60):02d}m" if not pd.isna(x) and x >= 60
-            else f"{int(x)}min" if not pd.isna(x) else "—")
+            lambda x: f"{int(x//60)}h{int(x%60):02d}m"
+            if not pd.isna(x) and x >= 60 else (f"{int(x)}min" if not pd.isna(x) else "—"))
         df_sc["Data_str"]  = df_sc["start_date"].dt.strftime("%d/%m/%Y")
         fig = px.scatter(
             df_sc, x="start_date", y="Pace_min",
@@ -2086,17 +1735,18 @@ with tab_hist:
             color_discrete_map=INTENSITY_COLORS,
             category_orders={"Intensidade": INTENSITY_ORDER},
             custom_data=["name","Data_str","distance_km","Pace_fmt","Tempo_fmt","elevation_gain"],
-            title="📍 Timeline — tamanho = distância · cor = intensidade",
+            title="📍 Todas as atividades — tamanho = distância · cor = intensidade",
             labels={"start_date":"","Pace_min":"Pace (min/km)"}, opacity=0.85)
         fig.update_traces(hovertemplate=(
             "<b>%{customdata[0]}</b><br>%{customdata[1]}<br>"
-            "📏 %{customdata[2]:.1f} km  ·  ⚡ %{customdata[3]}/km<br>"
-            "⏱️ %{customdata[4]}  ·  ⛰️ %{customdata[5]:.0f} m<extra></extra>"))
+            "📏 %{customdata[2]:.1f} km · ⚡ %{customdata[3]}/km<br>"
+            "⏱️ %{customdata[4]} · ⛰️ %{customdata[5]:.0f} m<extra></extra>"))
         set_pace_yaxis(fig, df_sc["pace_sec_km"])
-        fig.update_layout(xaxis_title="")
         st.plotly_chart(fig, width="stretch")
-        st.markdown("---")
+        st.caption("📖 Eixo Y invertido — pontos mais altos = mais rápido.")
 
+        # Tabela completa
+        st.markdown("---")
         cols = {"start_date":"Data","name":"Atividade","distance_km":"km",
                 "moving_time_sec":"Tempo","pace_sec_km":"Pace",
                 "average_heartrate":"FC Média","elevation_gain":"Elev (m)",
@@ -2105,23 +1755,24 @@ with tab_hist:
             cols["Intensidade"] = "Intensidade"
         df_tab = df_hv[[c for c in cols if c in df_hv.columns]].copy()
         df_tab = df_tab.sort_values("start_date", ascending=False)
-        df_tab["start_date"]        = df_tab["start_date"].dt.strftime("%d/%m/%Y %H:%M")
-        df_tab["pace_sec_km"]       = fmt_pace_vec(df_tab["pace_sec_km"])
-        df_tab["moving_time_sec"]   = (df_tab["moving_time_sec"] / 60).apply(
-            lambda x: f"{int(x//60)}h{int(x%60):02d}m" if not pd.isna(x) and x >= 60
-            else f"{int(x)}min" if not pd.isna(x) else "—")
-        df_tab["distance_km"]       = df_tab["distance_km"].apply(
+        df_tab["start_date"]         = df_tab["start_date"].dt.strftime("%d/%m/%Y %H:%M")
+        df_tab["pace_sec_km"]        = fmt_pace_vec(df_tab["pace_sec_km"])
+        df_tab["moving_time_sec"]    = (df_tab["moving_time_sec"] / 60).apply(
+            lambda x: f"{int(x//60)}h{int(x%60):02d}m"
+            if not pd.isna(x) and x >= 60 else (f"{int(x)}min" if not pd.isna(x) else "—"))
+        df_tab["distance_km"]        = df_tab["distance_km"].apply(
             lambda x: f"{x:.2f}" if not pd.isna(x) else "—")
-        df_tab["average_heartrate"] = df_tab["average_heartrate"].apply(
+        df_tab["average_heartrate"]  = df_tab["average_heartrate"].apply(
             lambda x: f"{int(x)} bpm" if not pd.isna(x) else "—")
-        df_tab["elevation_gain"]    = df_tab["elevation_gain"].apply(
+        df_tab["elevation_gain"]     = df_tab["elevation_gain"].apply(
             lambda x: f"{x:.0f}" if not pd.isna(x) else "—")
-        df_tab["calories"]          = df_tab["calories"].apply(
+        df_tab["calories"]           = df_tab["calories"].apply(
             lambda x: f"{int(x)}" if not pd.isna(x) else "—")
         df_tab = df_tab.rename(columns=cols)
         st.dataframe(df_tab, hide_index=True, width="stretch")
-        st.markdown("---")
 
+        # Detalhes por lap
+        st.markdown("---")
         st.subheader("🔎 Detalhes por Lap")
         if lps_run.empty:
             st.info("Dados de laps não disponíveis.")
@@ -2133,14 +1784,14 @@ with tab_hist:
                                " — " + df_sel["name"].fillna("Sem nome") +
                                " (" + df_sel["distance_km"].apply(lambda x: f"{x:.1f}km") + ")")
             ativ_selecionada = st.selectbox(
-                "Selecione uma corrida para ver os laps:",
+                "Selecione uma corrida:",
                 options=df_sel["id"].tolist(),
                 format_func=lambda x: df_sel.set_index("id").loc[x, "label"])
 
             if ativ_selecionada:
                 laps_ativ = (lps_run[lps_run["activity_id"] == ativ_selecionada]
                              .sort_values("lap_index").copy())
-                act_info = df_hv[df_hv["id"] == ativ_selecionada].iloc[0]
+                act_info  = df_hv[df_hv["id"] == ativ_selecionada].iloc[0]
                 c1,c2,c3,c4,c5 = st.columns(5)
                 c1.metric("📏 Distância",  f"{act_info['distance_km']:.2f} km")
                 c2.metric("⚡ Pace Médio", fmt_pace(act_info["pace_sec_km"]))
@@ -2160,16 +1811,17 @@ with tab_hist:
                         laps_ativ["pace_sec_km"].notna() &
                         (laps_ativ["distance_m"] >= 200) &
                         (laps_ativ["pace_sec_km"] <= 480)].copy()
-                    n_ignorados = len(laps_ativ) - len(laps_pace)
+                    n_ig = len(laps_ativ) - len(laps_pace)
                     if laps_pace.empty:
-                        st.info("Nenhum lap com distância ≥ 200m encontrado.")
+                        st.info("Nenhum lap com distância ≥ 200m.")
                     else:
                         laps_pace["Pace_fmt"] = fmt_pace_vec(laps_pace["pace_sec_km"])
                         laps_pace["Pace_min"] = laps_pace["pace_sec_km"] / 60
                         laps_pace["Lap"]      = laps_pace["lap_index"].astype(str)
                         p50 = laps_pace["pace_sec_km"].median()
                         laps_pace["cor"] = laps_pace["pace_sec_km"].apply(
-                            lambda x: GREEN if x < p50*0.97 else RED if x > p50*1.03 else BLUE)
+                            lambda x: GREEN if x < p50*0.97
+                            else RED if x > p50*1.03 else BLUE)
                         fig = go.Figure(go.Bar(
                             x=laps_pace["Lap"], y=laps_pace["Pace_min"],
                             text=laps_pace["Pace_fmt"], textposition="outside",
@@ -2179,8 +1831,8 @@ with tab_hist:
                                           "Distância: %{customdata[0]:.0f}m<extra></extra>"))
                         set_pace_yaxis(fig, laps_pace["pace_sec_km"])
                         titulo = "⚡ Pace por Lap"
-                        if n_ignorados > 0:
-                            titulo += f" ({n_ignorados} micro-laps ocultados)"
+                        if n_ig > 0:
+                            titulo += f" ({n_ig} micro-laps ocultados)"
                         fig.update_layout(title=titulo, xaxis_title="Lap")
                         st.plotly_chart(fig, width="stretch")
                 with col_b:
@@ -2190,7 +1842,8 @@ with tab_hist:
                         fig.add_scatter(x=laps_fc["lap_index"].astype(str),
                                         y=laps_fc["average_heartrate"],
                                         mode="lines+markers+text",
-                                        text=laps_fc["average_heartrate"].apply(lambda x: f"{x:.0f}"),
+                                        text=laps_fc["average_heartrate"].apply(
+                                            lambda x: f"{x:.0f}"),
                                         textposition="top center",
                                         line=dict(color=RED, width=2),
                                         marker=dict(size=8), name="FC Média")
@@ -2211,18 +1864,18 @@ with tab_hist:
                     "average_heartrate":"FC Média","max_heartrate":"FC Máx",
                     "total_elevation_gain":"Elev (m)","average_cadence":"Cadência"}
                 df_laps_tab = laps_ativ[[c for c in cols_lap if c in laps_ativ.columns]].copy()
-                df_laps_tab["pace_sec_km"]     = fmt_pace_vec(df_laps_tab["pace_sec_km"])
-                df_laps_tab["moving_time_sec"] = df_laps_tab["moving_time_sec"].apply(
+                df_laps_tab["pace_sec_km"]          = fmt_pace_vec(df_laps_tab["pace_sec_km"])
+                df_laps_tab["moving_time_sec"]       = df_laps_tab["moving_time_sec"].apply(
                     lambda x: f"{int(x//60)}:{int(x%60):02d}" if not pd.isna(x) else "—")
-                df_laps_tab["distance_m"]      = df_laps_tab["distance_m"].apply(
+                df_laps_tab["distance_m"]            = df_laps_tab["distance_m"].apply(
                     lambda x: f"{x:.0f}" if not pd.isna(x) else "—")
-                df_laps_tab["average_heartrate"] = df_laps_tab["average_heartrate"].apply(
+                df_laps_tab["average_heartrate"]     = df_laps_tab["average_heartrate"].apply(
                     lambda x: f"{x:.0f}" if not pd.isna(x) else "—")
-                df_laps_tab["max_heartrate"]   = df_laps_tab["max_heartrate"].apply(
+                df_laps_tab["max_heartrate"]         = df_laps_tab["max_heartrate"].apply(
                     lambda x: f"{x:.0f}" if not pd.isna(x) else "—")
-                df_laps_tab["total_elevation_gain"] = df_laps_tab["total_elevation_gain"].apply(
+                df_laps_tab["total_elevation_gain"]  = df_laps_tab["total_elevation_gain"].apply(
                     lambda x: f"{x:.1f}" if not pd.isna(x) else "—")
-                df_laps_tab["average_cadence"] = df_laps_tab["average_cadence"].apply(
+                df_laps_tab["average_cadence"]       = df_laps_tab["average_cadence"].apply(
                     lambda x: f"{x*2:.0f} spm" if not pd.isna(x) else "—")
                 df_laps_tab = df_laps_tab.rename(columns=cols_lap)
                 st.dataframe(df_laps_tab, hide_index=True, width="stretch")
