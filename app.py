@@ -1,8 +1,12 @@
+"""
+PerformanceRun — Streamlit Dashboard  (versão otimizada)
+"""
 import re
 import ast
 import math
 import datetime as _dt
 from datetime import timedelta
+
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -21,9 +25,8 @@ try:
 except ImportError:
     HAS_FOLIUM = False
 
-import streamlit.components.v1 as components
-
-st.set_page_config(page_title="PerformanceRun 🏃", page_icon="🏃", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="PerformanceRun 🏃", page_icon="🏃",
+                   layout="wide", initial_sidebar_state="collapsed")
 
 st.markdown("""<style>
 @media (max-width: 768px) {
@@ -63,8 +66,11 @@ ZONA_ORDER = ["Sem FC","Z1 - Regenerativo","Z2 - Aeróbico",
 GREEN, BLUE, AMBER, RED, PURPLE, GRAY = \
     "#2ECC71","#3498DB","#F39C12","#E74C3C","#9B59B6","#95A5A6"
 
-MESES_PT = {"Jan":"jan","Feb":"fev","Mar":"mar","Apr":"abr","May":"mai","Jun":"jun","Jul":"jul","Aug":"ago","Sep":"set","Oct":"out","Nov":"nov","Dec":"dez"}
-DIAS_PT  = {"Monday":"Seg","Tuesday":"Ter","Wednesday":"Qua","Thursday":"Qui","Friday":"Sex","Saturday":"Sáb","Sunday":"Dom"}
+MESES_PT = {"Jan":"jan","Feb":"fev","Mar":"mar","Apr":"abr","May":"mai",
+            "Jun":"jun","Jul":"jul","Aug":"ago","Sep":"set","Oct":"out",
+            "Nov":"nov","Dec":"dez"}
+DIAS_PT  = {"Monday":"Seg","Tuesday":"Ter","Wednesday":"Qua",
+            "Thursday":"Qui","Friday":"Sex","Saturday":"Sáb","Sunday":"Dom"}
 DIAS_ORDER_PT = ["Seg","Ter","Qua","Qui","Sex","Sáb","Dom"]
 
 # Zonas fáceis — usado em calc_intensidade_fc (módulo-level, não recriado por chamada)
@@ -74,280 +80,128 @@ _ZONAS_FACEIS_REL = {"Z1", "Z2", "Sem FC"}
 FC_MAX = 195
 
 KEYWORDS_INTENSIDADE = {
-    "Muito Forte": ["intervalad","tiro","vo2","muito forte","prova","teste"],
-    "Forte":       ["fartlek","forte","limiar"],
+    "Muito Forte": ["intervalad","tiro","interval","vo2","muito forte",
+                    "repetição","repeticao","série","serie","prova","teste"],
+    "Forte":       ["fartlek","forte","threshold","limiar"],
     "Moderado Firme": ["progressiv","ritmado","moderado firme","tempo run"],
     "Moderado":    ["longo","moderado","moder","base","contínuo","continuo",
                     "aeróbic","aerobic"],
     "Leve":        ["regenerat","fácil","facil","easy","recovery",
-                    "leve","caminhad","walk","solto","leve"],
+                    "leve","caminhad","walk","solto"],
 }
 
 # ── Regex pré-compilados (uma vez no startup, reutilizados em cada chamada) ───
-_KW_COMPILED: dict[str, re.Pattern] = {intensity: re.compile("|".join(re.escape(kw) for kw in kws), re.IGNORECASE)
+_KW_COMPILED: dict[str, re.Pattern] = {
+    intensity: re.compile(
+        "|".join(re.escape(kw) for kw in kws), re.IGNORECASE
+    )
     for intensity, kws in KEYWORDS_INTENSIDADE.items()
 }
 
 
-# ══════════════════════════════════════════════════════════════════════
-# 🔧 HELPERS + ANÁLISE (VERSÃO LIMPA)
-# ══════════════════════════════════════════════════════════════════════
-def ensure_datetime(series):
-    return pd.to_datetime(series, errors="coerce").dt.tz_localize(None)
+# ── Helpers ───────────────────────────────────────────────────────────────────
+def mesano_pt(dt_series):
+    return dt_series.dt.strftime("%b %Y").apply(
+        lambda x: f"{MESES_PT.get(x[:3], x[:3])} {x[4:]}")
 
-def haversine_km(c1, c2):
-    la1, lo1 = math.radians(c1[0]), math.radians(c1[1])
-    la2, lo2 = math.radians(c2[0]), math.radians(c2[1])
-    d = math.sin((la2-la1)/2)**2 + math.cos(la1)*math.cos(la2)*math.sin((lo2-lo1)/2)**2
-    return 2 * 6371 * math.asin(math.sqrt(d))
+def normalize_dt(col):
+    return pd.to_datetime(col, dayfirst=True, errors="coerce", utc=True).dt.tz_convert(None)
 
-
-def slice_coords(coords, km_ini, km_fim):
-    cum, buf, dentro = 0.0, [], False
-    for i, pt in enumerate(coords):
-        if i > 0:
-            cum += haversine_km(coords[i-1], pt)
-
-        if cum >= km_ini and not dentro:
-            dentro = True
-            if i > 0:
-                buf.append(coords[i-1])
-
-        if dentro:
-            buf.append(pt)
-
-        if cum >= km_fim:
-            break
-
-    return buf if len(buf) >= 2 else coords
-
-
-@st.cache_data(max_entries=2000, show_spinner=False)
-def decode_polyline(encoded):
-    if not encoded or pd.isna(encoded) or str(encoded) in ("nan", "None", ""):
-        return []
-
-    encoded = str(encoded)
-    coords, idx, lat, lng = [], 0, 0, 0
-
-    while idx < len(encoded):
-        for is_lng in (False, True):
-            shift = result = 0
-            while True:
-                if idx >= len(encoded):
-                    break
-                b = ord(encoded[idx]) - 63
-                idx += 1
-                result |= (b & 0x1f) << shift
-                shift += 5
-                if b < 0x20:
-                    break
-
-            delta = ~(result >> 1) if (result & 1) else (result >> 1)
-
-            if not is_lng:
-                lat += delta
-            else:
-                lng += delta
-
-        coords.append((lat / 1e5, lng / 1e5))
-
-    return coords
-
-
-def analyze_run(laps):
-    insights = []
-
-    if len(laps) >= 4:
-        first = laps["pace_sec_km"].iloc[:len(laps)//2].mean()
-        second = laps["pace_sec_km"].iloc[len(laps)//2:].mean()
-        delta = second - first
-
-        if delta > 10:
-            insights.append(f"⚠️ Queda de ritmo (+{delta:.0f}s/km)")
-        elif delta < -10:
-            insights.append(f"🚀 Negative split ({abs(delta):.0f}s/km)")
-
-    if "average_heartrate" in laps.columns and laps["average_heartrate"].notna().any():
-        first = laps["average_heartrate"].iloc[:len(laps)//2].mean()
-        second = laps["average_heartrate"].iloc[len(laps)//2:].mean()
-        drift = second - first
-
-        if drift > 5:
-            insights.append(f"❤️ Deriva cardíaca (+{drift:.0f} bpm)")
-
-    if "pace_sec_km" in laps.columns:
-        var = laps["pace_sec_km"].std()
-
-        if var < 8:
-            insights.append("💪 Ritmo consistente")
-        elif var > 20:
-            insights.append("⚠️ Ritmo irregular")
-
-    return insights
-
-# ══════════════════════════════════════════════════════════════════════
-# 🔧 CORE UTILS (COMPATÍVEL COM SEU CÓDIGO ATUAL)
-# ══════════════════════════════════════════════════════════════════════
-
-# ── DATA ─────────────────────────────────────────────────────────────
-def normalize_dt(series):
-    return pd.to_datetime(series, errors="coerce")
-
-
-def mesano_pt(series):
-    meses = {
-        1: "jan", 2: "fev", 3: "mar", 4: "abr",
-        5: "mai", 6: "jun", 7: "jul", 8: "ago",
-        9: "set", 10: "out", 11: "nov", 12: "dez"
-    }
-    return series.dt.month.map(meses) + "/" + series.dt.year.astype(str)
-
-
-# ── PACE ─────────────────────────────────────────────────────────────
 def fmt_pace(sec):
-    try:
-        sec = float(sec)
-        if sec <= 0 or pd.isna(sec):
-            return "—"
-        m = int(sec // 60)
-        s = int(sec % 60)
-        return f"{m}:{s:02d}"
-    except:
+    """Scalar: segundos → 'M:SS'. Use fmt_pace_vec() para Series."""
+    if pd.isna(sec) or sec <= 0:
         return "—"
+    s = int(sec)
+    return f"{s // 60}:{s % 60:02d}"
 
+def fmt_pace_vec(sec_series: pd.Series) -> pd.Series:
+    """Vetorizado: ~5x mais rápido que .apply(fmt_pace) em Series grandes."""
+    arr  = sec_series.to_numpy(dtype=float)
+    inv  = np.isnan(arr) | (arr <= 0)
+    mins = np.where(inv, 0, arr // 60).astype(int)
+    secs = np.where(inv, 0, arr %  60).astype(int)
+    # constrói strings via list comprehension (evita overhead de .apply por célula)
+    out  = [f"{m}:{s:02d}" if not i else "—" for m, s, i in zip(mins, secs, inv)]
+    return pd.Series(out, index=sec_series.index)
 
-def fmt_pace_vec(series):
-    return series.apply(fmt_pace)
-
-
-def set_pace_yaxis(fig, pace_series):
-    if pace_series.empty:
-        return
-    pmin = pace_series.min() / 60
-    pmax = pace_series.max() / 60
-    fig.update_yaxes(autorange="reversed", range=[pmax + 0.2, pmin - 0.2])
-
-
-# ── CORES / MAPA ─────────────────────────────────────────────────────
-def pace_to_hex(pace_sec):
-    if pd.isna(pace_sec):
-        return "#95A5A6"
-    if pace_sec < 270:
-        return "#E74C3C"
-    elif pace_sec < 330:
-        return "#F39C12"
-    elif pace_sec < 390:
-        return "#2ECC71"
-    else:
-        return "#3498DB"
-
-
-def fc_to_hex(fc):
-    if pd.isna(fc):
-        return "#BDC3C7"
-    if fc < FC_MAX * 0.7:
-        return "#2ECC71"
-    elif fc < FC_MAX * 0.8:
-        return "#3498DB"
-    elif fc < FC_MAX * 0.87:
-        return "#F39C12"
-    elif fc < FC_MAX * 0.93:
-        return "#E67E22"
-    else:
-        return "#E74C3C"
-
-
-def elev_gain_to_hex(elev_per_km):
-    if elev_per_km < 10:
-        return "#2ECC71"
-    elif elev_per_km < 30:
-        return "#F1C40F"
-    else:
-        return "#E74C3C"
-
-
-# ── INTENSIDADE ──────────────────────────────────────────────────────
-def cat_intensity(df):
-    if df is None or df.empty:
-        return pd.DataFrame({"Intensidade": []})
-
-    df = df.copy()
-
-    # garante coluna
-    if "Intensidade" not in df.columns:
-        df["Intensidade"] = None
-
-    # normaliza
-    df["Intensidade"] = (
-        df["Intensidade"]
-        .astype("object")
-        .fillna("Desconhecido")
-        .replace("Nan", "Desconhecido")
+def set_pace_yaxis(fig, pace_sec_series, step_sec=30):
+    mn = max(0, int(pace_sec_series.min()) - step_sec)
+    mx = int(pace_sec_series.max()) + step_sec
+    vals = list(range(mn - mn % step_sec, mx + step_sec, step_sec))
+    fig.update_yaxes(
+        autorange="reversed",
+        tickvals=[v / 60 for v in vals],
+        ticktext=[fmt_pace(v) for v in vals],
+        title="Pace (min/km)",
     )
+    return fig
 
+def zona_fc(hr):
+    """Escalar — mantido para compatibilidade pontual."""
+    if pd.isna(hr): return "Sem FC"
+    if hr < FC_MAX * 0.70: return "Z1 - Regenerativo"
+    if hr < FC_MAX * 0.80: return "Z2 - Aeróbico"
+    if hr < FC_MAX * 0.87: return "Z3 - Tempo"
+    if hr < FC_MAX * 0.93: return "Z4 - Limiar"
+    return "Z5 - VO2max"
+
+def zona_fc_vec(hr_series: pd.Series) -> pd.Series:
+    """Vetorizado com np.select — substitui .apply(zona_fc) em toda a Series."""
+    fc  = hr_series.to_numpy(dtype=float, na_value=np.nan)
+    nan = np.isnan(fc)
+    out = np.select(
+        [nan,
+         (~nan) & (fc < FC_MAX * 0.70),
+         (~nan) & (fc < FC_MAX * 0.80),
+         (~nan) & (fc < FC_MAX * 0.87),
+         (~nan) & (fc < FC_MAX * 0.93)],
+        ["Sem FC",
+         "Z1 - Regenerativo",
+         "Z2 - Aeróbico",
+         "Z3 - Tempo",
+         "Z4 - Limiar"],
+        default="Z5 - VO2max",
+    )
+    return pd.Series(out, index=hr_series.index, name="Zona FC")
+
+def hex_to_rgba(hex_color, alpha=200):
+    h = hex_color.lstrip("#")
+    return [int(h[i:i+2], 16) for i in (0, 2, 4)] + [alpha]
+
+def pace_to_rgba(pace_sec, min_pace=220, max_pace=420, alpha=220):
+    t = min(1, max(0, (pace_sec - min_pace) / (max_pace - min_pace)))
+    return [round(46 + t*185), round(204 - t*128), round(113 - t*53), alpha]
+
+def fc_to_hex(fc_bpm):
+    if pd.isna(fc_bpm) or float(fc_bpm) <= 0: return "#3498DB"
+    fc = float(fc_bpm)
+    if fc < FC_MAX * 0.70: return "#3498DB"
+    if fc < FC_MAX * 0.80: return "#2ECC71"
+    if fc < FC_MAX * 0.87: return "#F39C12"
+    if fc < FC_MAX * 0.93: return "#E67E22"
+    return "#E74C3C"
+
+def elev_gain_to_hex(elev_m_per_km):
+    if pd.isna(elev_m_per_km) or float(elev_m_per_km) < 0: return "#2ECC71"
+    t = min(1.0, max(0.0, float(elev_m_per_km) / 45.0))
+    return "#{:02X}{:02X}{:02X}".format(
+        round(46 + t*185), round(204 - t*128), round(113 - t*53))
+
+def pace_to_hex(pace_sec):
+    t = min(1, max(0, (float(pace_sec or 300) - 220) / 200))
+    r = round(231 - t * (231 - 46))
+    g = round(76  + t * (204 - 76))
+    b = round(60  + t * (113 - 60))
+    return "#{:02X}{:02X}{:02X}".format(r, g, b)
+
+def cat_intensity(df):
+    if "Intensidade" not in df.columns:
+        return df
+    df = df.copy()
+    df["Intensidade"] = pd.Categorical(df["Intensidade"],
+                                        categories=INTENSITY_ORDER, ordered=True)
     return df
 
-
-def zona_fc_vec(series):
-    def zona(fc):
-        if pd.isna(fc):
-            return "Sem FC"
-        if fc < FC_MAX * 0.7:
-            return "Z1 - Regenerativo"
-        elif fc < FC_MAX * 0.8:
-            return "Z2 - Aeróbico"
-        elif fc < FC_MAX * 0.87:
-            return "Z3 - Tempo"
-        elif fc < FC_MAX * 0.93:
-            return "Z4 - Limiar"
-        else:
-            return "Z5 - VO2max"
-    return series.apply(zona)
-
-
-# ── POLYLINE ─────────────────────────────────────────────────────────
-@st.cache_data(max_entries=2000, show_spinner=False)
-def decode_polyline(encoded):
-    if not encoded or pd.isna(encoded) or str(encoded) in ("nan", "None", ""):
-        return []
-
-    encoded = str(encoded)
-    coords, idx, lat, lng = [], 0, 0, 0
-
-    while idx < len(encoded):
-        for is_lng in (False, True):
-            shift = result = 0
-            while True:
-                if idx >= len(encoded):
-                    break
-                b = ord(encoded[idx]) - 63
-                idx += 1
-                result |= (b & 0x1f) << shift
-                shift += 5
-                if b < 0x20:
-                    break
-
-            delta = ~(result >> 1) if (result & 1) else (result >> 1)
-
-            if not is_lng:
-                lat += delta
-            else:
-                lng += delta
-
-        coords.append((lat / 1e5, lng / 1e5))
-
-    return coords
-
-
-def mesano_pt(series):
-    """Retorna mês/ano em português (ex: 'abr/2026')"""
-    meses = {
-        1: "jan", 2: "fev", 3: "mar", 4: "abr",
-        5: "mai", 6: "jun", 7: "jul", 8: "ago",
-        9: "set", 10: "out", 11: "nov", 12: "dez"
-    }
-    return series.dt.month.map(meses) + "/" + series.dt.year.astype(str)
 
 # ── decode_polyline cacheado ──────────────────────────────────────────────────
 @st.cache_data(max_entries=2000, show_spinner=False)
@@ -648,42 +502,14 @@ def filt_act(d):
     return d[mask].copy()
 
 def filt_laps(d):
-    if d.empty:
-        return d
-
-    d = d.copy()
-
-    # 🔥 NORMALIZA TOTAL (resolve timezone + string + tudo)
-    d["start_date"] = pd.to_datetime(d["start_date"], errors="coerce", utc=True)
-    d["start_date"] = d["start_date"].dt.tz_localize(None)
-
-    s = pd.to_datetime(s_dt)
-    e = pd.to_datetime(e_dt) + pd.Timedelta(days=1)
-
-    return d[
-        (d["start_date"] >= s) &
-        (d["start_date"] < e)
-    ]
+    if d.empty: return d
+    return d[(d["start_date"] >= s_dt) & (d["start_date"] <= e_dt)
+             & d["activity_sport_type"].isin(selected_sports)].copy()
 
 def filt_be(d):
-    if d.empty or "start_date" not in d.columns:
-        return d
-
-    d = d.copy()
-
-    # 🔥 Normaliza tudo (string, timezone, lixo)
-    d["start_date"] = pd.to_datetime(d["start_date"], errors="coerce", utc=True)
-    d = d.dropna(subset=["start_date"])  # remove NaT
-    d["start_date"] = d["start_date"].dt.tz_convert(None)
-
-    # 🔥 garante mesmo tipo dos filtros
-    s = pd.to_datetime(s_dt).tz_localize(None)
-    e = pd.to_datetime(e_dt).tz_localize(None) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
-
-    return d[
-        (d["start_date"] >= s) &
-        (d["start_date"] <= e)
-    ]
+    if d.empty: return d
+    return d[(d["start_date"] >= s_dt) & (d["start_date"] <= e_dt)
+             & d["activity_sport_type"].isin(selected_sports)].copy()
 
 df      = filt_act(df_raw)
 laps    = filt_laps(laps_raw)
@@ -733,7 +559,181 @@ def melhor_3km():
     return _melhor_3km_cached(laps_raw)
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  ABAS
+# ══════════════════════════════════════════════════════════════════════════════
+tab_geral, tab_perf, tab_fc, tab_intel, tab_elev, tab_clima, tab_metas, tab_vol, tab_coach, tab_mapa, tab_hist = st.tabs([
+    "📊 Visão Geral","⚡ Performance e Pace","❤️ Frequência Cardíaca",
+    "🧠 Inteligência de Treino","⛰️ Elevação","🌤️ Clima",
+    "🎯 Metas e Benchmarks","📈 Volume e Evolução","🧑‍🏫 Visão Treinador",
+    "🗺️ Mapa de Rotas","📋 Histórico",
+])
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  1 · VISÃO GERAL
+# ══════════════════════════════════════════════════════════════════════════════
+with tab_geral:
+    st.title("📊 Visão Geral")
+    c1,c2,c3 = st.columns(3)
+    c1.metric("🏃 Atividades",  f"{len(df):,}")
+    c2.metric("📏 Distância",   f"{df['distance_km'].sum():,.0f} km")
+    c3.metric("⏱️ Tempo Total", f"{df['moving_time_sec'].sum()/3600:,.1f} h")
+    c4,c5,c6 = st.columns(3)
+    c4.metric("⚡ Pace Médio",  fmt_pace(df_run["pace_sec_km"].mean()))
+    fc_med = df_run["average_heartrate"].mean()
+    c5.metric("❤️ FC Média",   f"{fc_med:.0f} bpm" if not pd.isna(fc_med) else "—")
+    cal = df["calories"].sum()
+    c6.metric("🔥 Calorias",   f"{cal:,.0f} kcal" if df["calories"].notna().any() else "—")
+    st.markdown("---")
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        df_m = (df.groupby(["MesAnoOrd","MesAno"])
+                  .agg(KM=("distance_km","sum")).reset_index()
+                  .sort_values("MesAnoOrd"))
+        fig = px.bar(df_m, x="MesAno", y="KM",
+                     title="📏 Distância por Mês (km)",
+                     color_discrete_sequence=[BLUE],
+                     labels={"KM":"km","MesAno":""}, text_auto=".0f")
+        fig.update_traces(textposition="outside")
+        fig.update_layout(xaxis_tickangle=-45, showlegend=False)
+        st.plotly_chart(fig, width="stretch")
+    with col_b:
+        if "Intensidade" in df.columns and df["Intensidade"].notna().any():
+            df_i = cat_intensity(df)["Intensidade"].value_counts().reset_index()
+            df_i.columns = ["Intensidade","Qtd"]
+            df_i = df_i[df_i["Intensidade"].isin(INTENSITY_ORDER)]
+            fig = px.pie(df_i, names="Intensidade", values="Qtd",
+                         title="🎯 Mix de Intensidade", hole=0.42,
+                         color="Intensidade", color_discrete_map=INTENSITY_COLORS,
+                         category_orders={"Intensidade": INTENSITY_ORDER})
+            fig.update_traces(textposition="inside", textinfo="percent+label")
+            st.plotly_chart(fig, width="stretch")
+            label = "🤖 Automática (FC)" if int_mode == "Automática (FC)" else "✍️ Manual"
+            with st.expander(f"Como cada categoria é definida? — {label}"):
+                if int_mode == "Automática (FC)":
+                    st.markdown(
+                        "**1ª — Nome da atividade:** palavras-chave têm prioridade.\n\n"
+                        "**2ª — Zonas de FC relativas ao FCmax** (fallback)."
+                    )
+                    criterios = {
+                        "🟢 Leve":           "Z1+Z2 ≥ 75%  *(< 78% FCmax)*",
+                        "🔵 Moderado":       "Demais casos",
+                        "🟡 Moderado Firme": "Z4+Z5 ≥ 15% **ou** Z3 ≥ 25%",
+                        "🟠 Forte":          "Z4+Z5 ≥ 30%",
+                        "🔴 Muito Forte":    "Z5 ≥ 20% **ou** Z4+Z5 ≥ 50%",
+                    }
+                    for cat, criterio in criterios.items():
+                        st.markdown(f"**{cat}** → {criterio}")
+                else:
+                    st.markdown("Modo **Manual** — coluna `Intensidade` preenchida manualmente.")
+
+    df_p = (df_run[df_run["pace_sec_km"].notna()]
+            .groupby(["MesAnoOrd","MesAno"])
+            .agg(Pace=("pace_sec_km","mean")).reset_index()
+            .sort_values("MesAnoOrd"))
+    df_p["Pace_fmt"] = fmt_pace_vec(df_p["Pace"])
+    df_p["Pace_min"] = df_p["Pace"] / 60
+    df_p["Roll3M"]   = df_p["Pace_min"].rolling(3, min_periods=1).mean()
+    fig = go.Figure()
+    fig.add_bar(x=df_p["MesAno"], y=df_p["Pace_min"],
+                name="Pace mensal", marker_color=BLUE, opacity=0.5,
+                customdata=df_p[["Pace_fmt"]].values,
+                hovertemplate="%{x}<br>Pace: %{customdata[0]}/km<extra></extra>")
+    fig.add_scatter(x=df_p["MesAno"], y=df_p["Roll3M"], name="Média 3M",
+                    mode="lines+markers", line=dict(color=RED, width=2, dash="dash"))
+    set_pace_yaxis(fig, df_p["Pace"])
+    fig.update_layout(title="⚡ Evolução do Pace Médio + Média Móvel 3M", xaxis_tickangle=-45)
+    st.plotly_chart(fig, width="stretch")
+    st.caption("📖 Eixo Y invertido: quanto mais alto no gráfico, mais rápido.")
+    if len(df_p) >= 2:
+        last_pace = df_p["Pace_min"].iloc[-1]
+        avg_pace  = df_p["Pace_min"].mean()
+        if last_pace < avg_pace:
+            st.success(f"📈 Pace do último mês ({df_p['Pace_fmt'].iloc[-1]}/km) "
+                       f"abaixo da média histórica ({fmt_pace(avg_pace*60)}/km) — evolução positiva!")
+        else:
+            st.info(f"ℹ️ Pace do último mês ({df_p['Pace_fmt'].iloc[-1]}/km) "
+                    f"acima da média ({fmt_pace(avg_pace*60)}/km).")
+
+    df_dia = (df["DiaSemana"].value_counts()
+              .reindex(DIAS_ORDER_PT).fillna(0)
+              .reset_index().rename(columns={"DiaSemana":"Dia","count":"Qtd"}))
+    fig = px.bar(df_dia, x="Dia", y="Qtd",
+                 title="📅 Atividades por Dia da Semana",
+                 color_discrete_sequence=[PURPLE], text_auto=True)
+    fig.update_layout(showlegend=False)
+    st.plotly_chart(fig, width="stretch")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  2 · PERFORMANCE E PACE
+# ══════════════════════════════════════════════════════════════════════════════
+with tab_perf:
+    st.title("⚡ Performance e Pace")
+    c1,c2,c3,c4,c5 = st.columns(5)
+    c1.metric("🥇 Melhor 3km",   melhor_3km())
+    c2.metric("🥇 Melhor 5K",    melhor_be("5k"))
+    c3.metric("🥇 Melhor 10K",   melhor_be("10k"))
+    c4.metric("🥇 Melhor HM",    melhor_be("half-marathon"), help="HM = Half Marathon · 21,1 km")
+    c5.metric("🏅 PRs Totais",   f"{int(df_run['pr_count'].sum()):,}"
+                                  if df_run["pr_count"].notna().any() else "—")
+    st.markdown("---")
+
+    if not be.empty:
+        be_sel = be[be["name"].str.lower().isin(["5k","10k"])].copy()
+        if not be_sel.empty:
+            be_best = (be_sel.groupby(["MesAnoOrd","MesAno","name"])
+                             .agg(Pace=("pace_sec_km","min")).reset_index()
+                             .sort_values("MesAnoOrd"))
+            be_best["Pace_fmt"] = fmt_pace_vec(be_best["Pace"])
+            be_best["Pace_min"] = be_best["Pace"] / 60
+            fig = px.line(be_best, x="MesAno", y="Pace_min", color="name",
+                          markers=True, custom_data=["Pace_fmt"],
+                          title="📈 Evolução Melhor Pace — 5K e 10K",
+                          color_discrete_map={"5k": RED, "10k": BLUE, "5K": RED, "10K": BLUE},
+                          labels={"Pace_min":"Pace (min/km)","MesAno":"","name":"Distância"})
+            fig.update_traces(
+                hovertemplate="<b>%{x}</b><br>Melhor pace: %{customdata[0]}/km<extra></extra>")
+            set_pace_yaxis(fig, be_best["Pace"])
+            fig.update_layout(xaxis_tickangle=-45)
+            st.plotly_chart(fig, width="stretch")
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        if "Intensidade" in df_run.columns and not lps_run.empty:
+            _mp = (lps_run.groupby("activity_id")
+                   .apply(compute_main_laps_pace).dropna().reset_index())
+            _mp.columns = ["id", "pace_main"]
+            df_run_p = df_run.merge(_mp, on="id", how="left")
+            df_run_p["pace_plot"] = df_run_p["pace_main"].fillna(df_run_p["pace_sec_km"])
+            _src = "bloco principal (aquec/desaquec excluídos)"
+        else:
+            df_run_p = df_run.copy()
+            df_run_p["pace_plot"] = df_run_p["pace_sec_km"]
+            _src = "corrida completa"
+
+        df_b = cat_intensity(df_run_p[df_run_p["pace_plot"].notna()].copy())
+        df_agg = (df_b.groupby("Intensidade", observed=True)["pace_plot"]
+                     .agg(Media="mean", DP="std").reset_index().dropna())
+        df_agg["Media_min"] = df_agg["Media"] / 60
+        df_agg["DP_min"]    = df_agg["DP"] / 60
+        df_agg["Label"]     = fmt_pace_vec(df_agg["Media"])
+        df_agg["Cor"]       = df_agg["Intensidade"].map(INTENSITY_COLORS)
+        fig = go.Figure()
+        for _, row in df_agg.iterrows():
+            fig.add_bar(
+                x=[row["Intensidade"]], y=[row["Media_min"]],
+                error_y=dict(type="data", array=[row["DP_min"]], visible=True),
+                marker_color=row["Cor"], name=row["Intensidade"],
+                text=row["Label"], textposition="outside",
+            )
+        set_pace_yaxis(fig, df_agg["Media"])
+        fig.update_layout(title="🎯 Pace Médio por Intensidade", showlegend=False)
+        st.plotly_chart(fig, width="stretch")
+        st.caption(
+            f"Pace do **{_src}**. Laps de aquecimento/desaquecimento "
+            "(>15% mais lentos que a mediana da sessão) são excluídos.")
 # ══════════════════════════════════════════════════════════════════════════════
 #  ABAS  —  5 abas focadas no corredor amador de alto rendimento
 # ══════════════════════════════════════════════════════════════════════════════
@@ -884,6 +884,72 @@ with tab_hoje:
     mg3.metric("🥇 Melhor 5K",    melhor_be("5k"))
     mg4.metric("🥇 Melhor 10K",   melhor_be("10k"))
 
+    # ── 🔥 Streak de semanas ativas ──────────────────────────────────────────
+    st.markdown("---")
+    st.subheader("🔥 Consistência — Semanas Ativas")
+
+    _all_runs = _runs_raw.copy() if not _runs_raw.empty else pd.DataFrame()
+    if not _all_runs.empty:
+        _all_runs["_week"] = _all_runs["start_date"].dt.to_period("W")
+        _wk_counts = (_all_runs.groupby("_week").size().reset_index(name="runs"))
+        _wk_counts["active"] = _wk_counts["runs"] >= 3
+
+        _streak_atual = 0
+        for _a in reversed(_wk_counts["active"].tolist()):
+            if _a: _streak_atual += 1
+            else:  break
+
+        _best, _cur = 0, 0
+        for _a in _wk_counts["active"].tolist():
+            if _a: _cur += 1; _best = max(_best, _cur)
+            else:  _cur = 0
+
+        _total_active = int(_wk_counts["active"].sum())
+        _total_weeks  = len(_wk_counts)
+        _pct_active   = _total_active / _total_weeks * 100 if _total_weeks else 0
+
+        sk1, sk2, sk3, sk4 = st.columns(4)
+        sk1.metric("🔥 Streak Atual",   f"{_streak_atual} sem.", "semanas ≥ 3 corridas consecutivas")
+        sk2.metric("🏆 Melhor Streak",  f"{_best} sem.")
+        sk3.metric("✅ Semanas Ativas",  f"{_total_active}/{_total_weeks}", f"{_pct_active:.0f}% de consistência")
+        sk4.metric("📅 Total de Semanas", f"{_total_weeks}")
+
+        _wk_plot = _wk_counts.tail(26).copy()
+        _wk_plot["semana_str"] = _wk_plot["_week"].astype(str).str.replace(
+            r"(\d{4})-W(\d+)", r"S\2/\1", regex=True)
+        _wk_plot["cor"]   = _wk_plot["active"].map({True: "#2ECC71", False: "#E74C3C"})
+        _wk_plot["alpha"] = _wk_plot["active"].map({True: 1.0, False: 0.45})
+
+        fig_streak = go.Figure()
+        fig_streak.add_bar(
+            x=_wk_plot["semana_str"], y=_wk_plot["runs"],
+            marker=dict(color=_wk_plot["cor"].tolist(),
+                        opacity=_wk_plot["alpha"].tolist(),
+                        line=dict(width=0)),
+            text=_wk_plot["runs"], textposition="outside",
+            hovertemplate="<b>%{x}</b><br>%{y} corridas<extra></extra>",
+        )
+        fig_streak.add_hline(y=3, line_dash="dot", line_color="#F1C40F", line_width=2,
+                             annotation_text="  mínimo saudável (3/sem)",
+                             annotation_position="top left",
+                             annotation_font=dict(size=11, color="#F1C40F"))
+        if _streak_atual > 0:
+            fig_streak.add_annotation(
+                x=_wk_plot["semana_str"].iloc[-1],
+                y=float(_wk_plot["runs"].iloc[-1]) + 0.3,
+                text=f"🔥 {_streak_atual}", showarrow=False,
+                font=dict(size=13, color="#2ECC71"), xanchor="center")
+        fig_streak.update_layout(
+            title=dict(text="Corridas por semana — últimas 26 semanas", font=dict(size=15), x=0),
+            xaxis=dict(tickangle=-45, showgrid=False, tickfont=dict(size=9)),
+            yaxis=dict(title="Corridas", gridcolor="rgba(128,128,128,0.15)"),
+            plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+            margin=dict(t=45, b=10, l=0, r=0), showlegend=False)
+        st.plotly_chart(fig_streak, width="stretch")
+        if   _streak_atual >= 8: st.success(f"🔥 {_streak_atual} semanas consecutivas! Consistência de elite.")
+        elif _streak_atual >= 4: st.info(f"💪 {_streak_atual} semanas em sequência — hábito sólido.")
+        elif _streak_atual == 0: st.warning("⚠️ Sequência interrompida. Que tal retomar esta semana?")
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  2 · DESEMPENHO  —  PRs, pace, eficiência, condições
 # ══════════════════════════════════════════════════════════════════════════════
@@ -898,6 +964,78 @@ with tab_desemp:
     c4.metric("🥇 Melhor HM",   melhor_be("half-marathon"), help="Half Marathon 21,1 km")
     c5.metric("🏅 PRs Totais",  f"{int(df_run['pr_count'].sum()):,}"
                                   if df_run["pr_count"].notna().any() else "—")
+    st.markdown("---")
+
+    # ── 🏁 Preditor de Prova — Fórmula de Riegel ─────────────────────────────
+    def _riegel(t1_sec, d1_m, d2_m): return t1_sec * (d2_m / d1_m) ** 1.06
+    def _fmt_hms(sec):
+        sec = int(sec); h, r = divmod(sec, 3600); m, s = divmod(r, 60)
+        return f"{h}h{m:02d}m{s:02d}s" if h else f"{m}:{s:02d}"
+
+    _DIST_M = {"1K":1000,"3K":3000,"5K":5000,"10K":10000,"HM 21K":21097,"Maratona":42195}
+    _ref_sec, _ref_dist, _ref_nome = None, None, None
+    if not be_raw.empty:
+        for _nb, _db in [("10k",10000),("5k",5000),("1k",1000)]:
+            _sub = be_raw[be_raw["name"].str.lower() == _nb]
+            if not _sub.empty:
+                _ref_sec  = float(_sub["pace_sec_km"].min() * _db / 1000)
+                _ref_dist = _db; _ref_nome = _nb.upper(); break
+
+    if _ref_sec and _ref_dist:
+        st.subheader("🏁 Preditor de Provas")
+        st.caption(f"Baseado no seu melhor **{_ref_nome}** ({_fmt_hms(_ref_sec)}) · "
+                   "Fórmula de Riegel: T₂ = T₁ × (D₂/D₁)^1.06")
+        _preds = {d: _riegel(_ref_sec, _ref_dist, m) for d,m in _DIST_M.items() if m != _ref_dist}
+        _ICONS = {"1K":"🚀","3K":"💨","5K":"🏃","10K":"⚡","HM 21K":"🌟","Maratona":"🏅"}
+        _cols_pred = st.columns(len(_preds))
+        for _ci, (_d, _t) in zip(_cols_pred, _preds.items()):
+            _ci.metric(f"{_ICONS.get(_d,'')} {_d}", _fmt_hms(_t),
+                       f"pace {fmt_pace(_t/(_DIST_M[_d]/1000))}/km", delta_color="off")
+        # Gráfico
+        _all_preds = {**{_ref_nome: _ref_sec}, **_preds}
+        _chart_data = sorted(
+            [{"Distância": d,
+              "Pace_sec":  _all_preds[d] / (_DIST_M.get(d, _ref_dist) / 1000),
+              "Pace_min":  _all_preds[d] / (_DIST_M.get(d, _ref_dist) / 1000) / 60,
+              "Pace_fmt":  fmt_pace(_all_preds[d] / (_DIST_M.get(d, _ref_dist) / 1000)),
+              "Tempo":     _fmt_hms(_all_preds[d]),
+              "is_ref":    d == _ref_nome}
+             for d in _all_preds if _DIST_M.get(d, _ref_dist) > 0],
+            key=lambda x: _DIST_M.get(x["Distância"], _ref_dist))
+        _cd = pd.DataFrame(_chart_data)
+        fig_pred = go.Figure()
+        fig_pred.add_scatter(x=_cd["Distância"], y=_cd["Pace_min"],
+                             fill="tozeroy", fillcolor="rgba(52,152,219,0.07)",
+                             line=dict(width=0), showlegend=False, hoverinfo="skip")
+        fig_pred.add_scatter(
+            x=_cd["Distância"], y=_cd["Pace_min"],
+            mode="lines+markers+text",
+            line=dict(color="#3498DB", width=2.5, shape="spline"),
+            marker=dict(size=[14 if r else 9 for r in _cd["is_ref"]],
+                        color=["#F1C40F" if r else "#3498DB" for r in _cd["is_ref"]],
+                        line=dict(width=2, color="white")),
+            text=_cd["Pace_fmt"], textposition="top center", textfont=dict(size=10),
+            customdata=_cd[["Tempo","Distância"]].values,
+            hovertemplate="<b>%{customdata[1]}</b><br>Tempo: <b>%{customdata[0]}</b><br>Pace: <b>%{text}/km</b><extra></extra>",
+            showlegend=False)
+        _ref_row = _cd[_cd["is_ref"]]
+        if not _ref_row.empty:
+            fig_pred.add_scatter(x=_ref_row["Distância"], y=_ref_row["Pace_min"],
+                                 mode="markers+text",
+                                 marker=dict(size=16, color="#F1C40F",
+                                             line=dict(width=2, color="white"), symbol="star"),
+                                 text=["⭐ referência"], textposition="bottom center",
+                                 textfont=dict(size=10, color="#F1C40F"),
+                                 showlegend=False, hoverinfo="skip")
+        set_pace_yaxis(fig_pred, _cd["Pace_sec"])
+        fig_pred.update_layout(
+            title=dict(text=f"Pace predito por distância (ref: {_ref_nome})", font=dict(size=14), x=0),
+            xaxis=dict(showgrid=False),
+            yaxis=dict(gridcolor="rgba(128,128,128,0.15)"),
+            plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+            margin=dict(t=45, b=10, l=0, r=10))
+        st.plotly_chart(fig_pred, width="stretch")
+        st.caption("⭐ = tempo real · demais = estimativas Riegel. Margem maior para distâncias longas.")
     st.markdown("---")
 
     # ── Evolução melhor pace 5K / 10K ────────────────────────────────────────
@@ -977,6 +1115,67 @@ with tab_desemp:
             fig.update_layout(xaxis_tickangle=-45)
             st.plotly_chart(fig, width="stretch")
             st.caption("CV < 10%: ritmo uniforme. CV > 25%: sessão de tiros/intervalos.")
+
+
+    # ── 🦵 Cadência Média Mensal ──────────────────────────────────────────────
+    if not lps_run.empty and "average_cadence" in lps_run.columns:
+        _cad = lps_run[lps_run["average_cadence"].notna() & (lps_run["average_cadence"] > 50)].copy()
+        _cad["spm"] = _cad["average_cadence"] * 2
+        if not _cad.empty:
+            _cad_m = (_cad.groupby(["MesAnoOrd","MesAno"])
+                         .agg(Cadencia=("spm","mean"), DP=("spm","std")).reset_index()
+                         .sort_values("MesAnoOrd"))
+            _cad_m["Cor"] = _cad_m["Cadencia"].apply(
+                lambda x: "#E74C3C" if x < 160 else "#F1C40F" if x < 170
+                else "#2ECC71" if x <= 185 else "#3498DB")
+            st.markdown("---")
+            st.subheader("🦵 Cadência — Economia de Corrida")
+            st.caption("Ideal: **175–185 spm** · < 170 = passada longa, maior risco de lesão.")
+            _cad_atual = float(_cad_m["Cadencia"].iloc[-1])
+            _cad_media = float(_cad_m["Cadencia"].mean())
+            cd1, cd2, cd3 = st.columns(3)
+            cd1.metric("🦵 Cadência Atual",  f"{_cad_atual:.0f} spm",
+                       f"{_cad_atual-_cad_media:+.1f} vs média",
+                       delta_color="normal" if 175<=_cad_atual<=185 else "inverse")
+            cd2.metric("📊 Média Histórica", f"{_cad_media:.0f} spm")
+            cd3.metric("📍 Zona", ("🔴 Baixa" if _cad_atual<160 else "🟡 Atenção"
+                                   if _cad_atual<170 else "✅ Ideal" if _cad_atual<=185 else "🔵 Alta"))
+            fig_cad = go.Figure()
+            fig_cad.add_hrect(y0=175, y1=185, fillcolor="rgba(46,204,113,0.10)",
+                              line=dict(width=0), annotation_text="zona ideal 175–185",
+                              annotation_position="top right",
+                              annotation_font=dict(size=10, color="#2ECC71"))
+            fig_cad.add_scatter(x=_cad_m["MesAno"], y=_cad_m["Cadencia"],
+                                fill="tozeroy", fillcolor="rgba(52,152,219,0.06)",
+                                line=dict(width=0), showlegend=False, hoverinfo="skip")
+            fig_cad.add_scatter(
+                x=_cad_m["MesAno"], y=_cad_m["Cadencia"],
+                mode="lines+markers+text",
+                line=dict(color="#3498DB", width=2.5, shape="spline"),
+                marker=dict(size=10, color=_cad_m["Cor"].tolist(),
+                            line=dict(width=2, color="white")),
+                text=_cad_m["Cadencia"].apply(lambda x: f"{x:.0f}"),
+                textposition="top center", textfont=dict(size=9),
+                error_y=dict(type="data", array=_cad_m["DP"].tolist(),
+                             visible=True, color="rgba(52,152,219,0.3)", thickness=1.5),
+                hovertemplate="<b>%{x}</b><br>Cadência: <b>%{y:.0f} spm</b><extra></extra>",
+                showlegend=False)
+            for _yref, _cor, _txt in [(160,"#E74C3C","160 — mín"),(170,"#F1C40F","170 — atenção"),(185,"#2ECC71","185 — máx ideal")]:
+                fig_cad.add_hline(y=_yref, line_dash="dot", line_color=_cor, line_width=1,
+                                  opacity=0.6, annotation_text=f"  {_txt}",
+                                  annotation_position="top left",
+                                  annotation_font=dict(size=9, color=_cor))
+            fig_cad.update_layout(
+                title=dict(text="Cadência média por mês (spm)", font=dict(size=14), x=0),
+                xaxis=dict(tickangle=-45, showgrid=False),
+                yaxis=dict(title="spm", range=[140, 200], gridcolor="rgba(128,128,128,0.12)"),
+                plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                margin=dict(t=45, b=10, l=0, r=0))
+            st.plotly_chart(fig_cad, width="stretch")
+            if _cad_atual < 170:
+                st.warning("⚠️ Cadência baixa — experimente aumentar a frequência sem mudar a velocidade. Metrônomo a 175 bpm ajuda.")
+            elif 175 <= _cad_atual <= 185:
+                st.success("✅ Cadência na faixa ideal. Boa economia de movimento.")
 
     # ── Eficiência Aeróbica Z2 ────────────────────────────────────────────────
     if not lps_run.empty and "Zona FC" in lps_run.columns:
@@ -1248,6 +1447,77 @@ with tab_carga:
                           xaxis_tickangle=-45)
         st.plotly_chart(fig, width="stretch")
         st.caption("MoM = Month over Month. >30% aumenta risco de lesão.")
+
+
+    # ── 📅 Comparativo Ano a Ano ──────────────────────────────────────────────
+    st.markdown("---")
+    st.subheader("📅 Comparativo Ano a Ano")
+    st.caption("Volume mensal: ano atual vs ano anterior.")
+    _ano_atual = pd.Timestamp.now().year
+    _ano_ant   = _ano_atual - 1
+    _yoy_base  = _runs_raw.copy() if not _runs_raw.empty else pd.DataFrame()
+    if not _yoy_base.empty:
+        _yoy_base["_ano"] = _yoy_base["start_date"].dt.year
+        _yoy_base["_mes"] = _yoy_base["start_date"].dt.month
+        _yoy_at  = (_yoy_base[_yoy_base["_ano"]==_ano_atual]
+                    .groupby("_mes").agg(KM=("distance_km","sum")).reset_index())
+        _yoy_ant = (_yoy_base[_yoy_base["_ano"]==_ano_ant]
+                    .groupby("_mes").agg(KM=("distance_km","sum")).reset_index())
+        _MO = list(range(1,13))
+        _ML = [MESES_PT.get(pd.Timestamp(2000,m,1).strftime("%b").capitalize(),
+               pd.Timestamp(2000,m,1).strftime("%b")) for m in _MO]
+        _yoy_at  = pd.DataFrame({"_mes":_MO}).merge(_yoy_at,  on="_mes", how="left").fillna(0)
+        _yoy_ant = pd.DataFrame({"_mes":_MO}).merge(_yoy_ant, on="_mes", how="left").fillna(0)
+        _km_at  = float(_yoy_at["KM"].sum()); _km_ant = float(_yoy_ant["KM"].sum())
+        _pct_d  = (_km_at-_km_ant)/_km_ant*100 if _km_ant>0 else 0
+        yc1,yc2,yc3 = st.columns(3)
+        yc1.metric(f"📏 KM {_ano_atual}", f"{_km_at:,.0f} km",
+                   f"{_km_at-_km_ant:+.0f} km vs {_ano_ant}")
+        yc2.metric(f"📏 KM {_ano_ant}",   f"{_km_ant:,.0f} km")
+        yc3.metric("📈 Variação anual",   f"{_pct_d:+.1f}%",
+                   delta_color="normal" if _pct_d>=0 else "inverse")
+        fig_yoy = go.Figure()
+        fig_yoy.add_scatter(x=_ML, y=_yoy_ant["KM"], name=str(_ano_ant),
+                            mode="lines+markers", fill="tozeroy",
+                            fillcolor="rgba(149,165,166,0.10)",
+                            line=dict(color="#95A5A6", width=2, dash="dot", shape="spline"),
+                            marker=dict(size=7, color="#95A5A6", line=dict(width=1.5,color="white")),
+                            hovertemplate=f"<b>{_ano_ant} — %{{x}}</b><br>%{{y:.0f}} km<extra></extra>")
+        fig_yoy.add_scatter(x=_ML, y=_yoy_at["KM"], name=str(_ano_atual),
+                            mode="lines+markers+text", fill="tozeroy",
+                            fillcolor="rgba(52,152,219,0.12)",
+                            line=dict(color="#3498DB", width=3, shape="spline"),
+                            marker=dict(size=9, color="#3498DB", line=dict(width=2,color="white")),
+                            text=[f"{v:.0f}" if v>0 else "" for v in _yoy_at["KM"]],
+                            textposition="top center", textfont=dict(size=9, color="#3498DB"),
+                            hovertemplate=f"<b>{_ano_atual} — %{{x}}</b><br>%{{y:.0f}} km<extra></extra>")
+        # Triângulos verdes nos meses em que superou o ano anterior
+        _sup = _yoy_at[(_yoy_at["KM"]>_yoy_ant["KM"].values) & (_yoy_ant["KM"].values>0)]
+        if not _sup.empty:
+            _sup_labels = [_ML[i-1] for i in _sup["_mes"]]
+            fig_yoy.add_scatter(x=_sup_labels, y=_sup["KM"], mode="markers",
+                                marker=dict(size=13, color="#2ECC71", symbol="triangle-up",
+                                            line=dict(width=1.5,color="white")),
+                                name="Acima do ano ant.",
+                                hovertemplate="<b>%{x}</b><br>+%{y:.0f} km<extra></extra>")
+        fig_yoy.update_layout(
+            title=dict(text=f"Volume mensal: {_ano_atual} vs {_ano_ant}", font=dict(size=15), x=0),
+            xaxis=dict(showgrid=False, tickfont=dict(size=11)),
+            yaxis=dict(title="km", gridcolor="rgba(128,128,128,0.12)", rangemode="tozero"),
+            plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+            legend=dict(orientation="h", y=-0.15, x=0),
+            margin=dict(t=50, b=10, l=0, r=0), hovermode="x unified")
+        st.plotly_chart(fig_yoy, width="stretch")
+        with st.expander("Ver tabela mês a mês"):
+            _dtbl = [{"Mês":_ML[i-1].capitalize(),
+                      str(_ano_ant): f"{_yoy_ant.loc[_yoy_ant['_mes']==i,'KM'].values[0]:.0f} km",
+                      str(_ano_atual): f"{_yoy_at.loc[_yoy_at['_mes']==i,'KM'].values[0]:.0f} km",
+                      "Δ": f"{_yoy_at.loc[_yoy_at['_mes']==i,'KM'].values[0]-_yoy_ant.loc[_yoy_ant['_mes']==i,'KM'].values[0]:+.0f} km"}
+                     for i in _MO if (_yoy_at.loc[_yoy_at['_mes']==i,'KM'].values[0]>0 or
+                                       _yoy_ant.loc[_yoy_ant['_mes']==i,'KM'].values[0]>0)]
+            st.dataframe(pd.DataFrame(_dtbl), hide_index=True, use_container_width=True)
+    else:
+        st.info("Dados insuficientes para comparativo anual.")
 
     # ── Zonas FC ──────────────────────────────────────────────────────────────
     st.markdown("---")
