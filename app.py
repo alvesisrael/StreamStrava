@@ -650,14 +650,19 @@ def filt_laps(d):
     ]
 
 def filt_be(d):
-    if d.empty:
+    if d.empty or "start_date" not in d.columns:
         return d
 
     d = d.copy()
-    d["start_date"] = pd.to_datetime(d["start_date"], errors="coerce")
 
-    s = pd.to_datetime(s_dt)
-    e = pd.to_datetime(e_dt) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+    # 🔥 Normaliza tudo (string, timezone, lixo)
+    d["start_date"] = pd.to_datetime(d["start_date"], errors="coerce", utc=True)
+    d = d.dropna(subset=["start_date"])  # remove NaT
+    d["start_date"] = d["start_date"].dt.tz_convert(None)
+
+    # 🔥 garante mesmo tipo dos filtros
+    s = pd.to_datetime(s_dt).tz_localize(None)
+    e = pd.to_datetime(e_dt).tz_localize(None) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
 
     return d[
         (d["start_date"] >= s) &
