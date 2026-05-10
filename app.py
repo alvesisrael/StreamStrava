@@ -1716,161 +1716,263 @@ with tab_coach:
 #  10 · MAPA DE ROTAS
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_mapa:
+
     st.title("🗺️ Mapa de Rotas")
-    _POLY_CANDIDATES = ["map_polyline","polyline","map.polyline",
-                        "summary_polyline","map_summary_polyline"]
-    poly_col = next((c for c in _POLY_CANDIDATES
-                     if c in df_raw.columns and df_raw[c].notna().any()), None)
-    has_ll = "latitude" in df_run.columns and "longitude" in df_run.columns
+
+    # ──────────────────────────────────────────────────────────────────────
+    # Detecta coluna de polyline
+    # ──────────────────────────────────────────────────────────────────────
+    POLY_CANDIDATES = [
+        "map_polyline",
+        "polyline",
+        "map.polyline",
+        "summary_polyline",
+        "map_summary_polyline"
+    ]
+
+    poly_col = next(
+        (
+            c for c in POLY_CANDIDATES
+            if c in df_raw.columns and df_raw[c].notna().any()
+        ),
+        None
+    )
+
+    has_ll = (
+        "latitude" in df_run.columns and
+        "longitude" in df_run.columns
+    )
 
     if not has_ll and poly_col is None:
         st.error("Nenhum dado de GPS encontrado.")
         st.stop()
-    if poly_col is None:
-        st.info("**Mostrando pontos de inicio** (colunas `latitude`/`longitude`). "
-                "Para rotas completas, adicione `map_summary_polyline` ao extrator.")
 
+    # ──────────────────────────────────────────────────────────────────────
+    # Filtra atividades válidas
+    # ──────────────────────────────────────────────────────────────────────
     df_map = df_run.copy()
+
     if poly_col:
-        df_map = df_map[df_map[poly_col].notna() & (df_map[poly_col].astype(str).str.len() > 4)]
-    elif has_ll:
-        df_map = df_map[df_map["latitude"].notna() & df_map["longitude"].notna()]
+        df_map = df_map[
+            df_map[poly_col].notna() &
+            (df_map[poly_col].astype(str).str.len() > 4)
+        ]
+    else:
+        df_map = df_map.dropna(subset=["latitude", "longitude"])
+
     df_map = df_map.sort_values("start_date", ascending=False)
 
     if df_map.empty:
-        st.warning("Nenhuma atividade com dados de GPS no periodo selecionado.")
-    else:
-        def _make_label(row):
-            dt  = row["start_date"].strftime("%d/%m/%Y")
-            nm  = str(row.get("name") or "")[:35]
-            km  = round(float(row.get("distance_km") or 0), 1)
-            int_v = str(row.get("Intensidade") or "")
-            int_tag = f" [{int_v}]" if int_v and int_v != "None" else ""
-            return f"{dt} — {nm} ({km}km){int_tag}"
-
-        _label_to_id = {_make_label(row): row["id"] for _, row in df_map.iterrows()}
-        _all_labels  = list(_label_to_id.keys())
-        sel_labels   = st.multiselect("Selecione atividades para exibir e comparar",
-            options=_all_labels,
-            default=_all_labels[:min(2, len(_all_labels))],
-            help="Digite para buscar por nome, data ou distância.",
-            placeholder="Busque por nome, data ou distância...")
-
-        if not sel_labels:
-            st.info("Selecione ao menos uma atividade acima para ver o mapa.")
-            st.stop()
-
-        _sel_ids = [_label_to_id[l] for l in sel_labels]
-        df_map   = df_map[df_map["id"].isin(_sel_ids)].copy()
-        st.caption(f"**{len(df_map)}** atividade(s) selecionada(s) · {len(_all_labels)} disponíveis no período")
-
-        if poly_col and not df_map.empty:
-            _fc = decode_polyline(df_map[poly_col].dropna().iloc[0])
-            lat_c = _fc[0][0] if _fc else -23.55
-            lng_c = _fc[0][1] if _fc else -46.63
-        elif has_ll and df_map["latitude"].notna().any():
-            lat_c = float(df_map["latitude"].dropna().mean())
-            lng_c = float(df_map["longitude"].dropna().mean())
-        else:
-            lat_c, lng_c = -23.55, -46.63
-
-        def get_color_hex(row):
-            return INTENSITY_COLORS.get(str(row.get("Intensidade","Moderado") or "Moderado"), BLUE)
-
-        routes = []
-        for _, row in df_map.iterrows():
-            coords = decode_polyline(row[poly_col]) if poly_col else []
-            r_km   = float(row.get("distance_km") or 0)
-            hr_v   = int(row["average_heartrate"]) if not pd.isna(row.get("average_heartrate", float("nan"))) else 0
-            routes.append({
-                "id":       row.get("id"),
-                "name":     str(row.get("name","") or ""),
-                "date":     row["start_date"].strftime("%d/%m/%Y"),
-                "km":       round(r_km, 1),
-                "pace":     fmt_pace(row.get("pace_sec_km", 0) or 0),
-                "pace_sec": float(row.get("pace_sec_km") or 300),
-                "hr":       hr_v,
-                "intensity":str(row.get("Intensidade","Moderado") or "Moderado"),
-                "color_hex":get_color_hex(row),
-                "lat":      float(row["latitude"]) if has_ll and not pd.isna(row.get("latitude", float("nan"))) else lat_c,
-                "lng":      float(row["longitude"]) if has_ll and not pd.isna(row.get("longitude", float("nan"))) else lng_c,
-                "coords":   coords,
-            })
-
-with tab_mapa:
-    st.title("🗺️ Mapa de Rotas")
-
-    poly_col = next((c for c in ["map_summary_polyline","summary_polyline"]
-                     if c in df_raw.columns), None)
-
-    df_map = df_run.dropna(subset=["latitude","longitude"]).copy()
-    df_map = df_map.sort_values("start_date", ascending=False)
-
-    labels = df_map.apply(
-        lambda r: f"{r['start_date'].strftime('%d/%m')} — {r['distance_km']:.1f}km",
-        axis=1
-    )
-
-    selected = st.multiselect(
-        "Selecione atividades",
-        options=df_map["id"],
-        format_func=lambda x: labels[df_map["id"] == x].values[0],
-        default=df_map["id"].head(2)
-    )
-
-    if not selected:
+        st.warning("Nenhuma atividade com GPS encontrada.")
         st.stop()
 
-    df_map = df_map[df_map["id"].isin(selected)]
+    # ──────────────────────────────────────────────────────────────────────
+    # Labels de seleção
+    # ──────────────────────────────────────────────────────────────────────
+    def make_label(row):
 
+        dt = row["start_date"].strftime("%d/%m/%Y")
+        km = row.get("distance_km", 0)
+
+        intensidade = str(
+            row.get("Intensidade", "")
+        )
+
+        tag = (
+            f" [{intensidade}]"
+            if intensidade and intensidade != "None"
+            else ""
+        )
+
+        return (
+            f"{dt} — "
+            f"{row['name'][:35]} "
+            f"({km:.1f} km)"
+            f"{tag}"
+        )
+
+    label_map = {
+        make_label(r): r["id"]
+        for _, r in df_map.iterrows()
+    }
+
+    labels = list(label_map.keys())
+
+    selected_labels = st.multiselect(
+        "Selecione atividades",
+        options=labels,
+        default=labels[:min(2, len(labels))],
+        placeholder="Buscar atividade...",
+    )
+
+    if not selected_labels:
+        st.info("Selecione ao menos uma atividade.")
+        st.stop()
+
+    selected_ids = [
+        label_map[l]
+        for l in selected_labels
+    ]
+
+    df_map = df_map[
+        df_map["id"].isin(selected_ids)
+    ].copy()
+
+    st.caption(
+        f"{len(df_map)} atividade(s) selecionada(s)"
+    )
+
+    # ──────────────────────────────────────────────────────────────────────
     # Centro do mapa
+    # ──────────────────────────────────────────────────────────────────────
     lat_c = df_map["latitude"].mean()
     lng_c = df_map["longitude"].mean()
 
-    m = folium.Map(location=[lat_c, lng_c], zoom_start=13)
+    m = folium.Map(
+        location=[lat_c, lng_c],
+        zoom_start=12,
+        control_scale=True
+    )
 
+    # ──────────────────────────────────────────────────────────────────────
+    # Cor por intensidade
+    # ──────────────────────────────────────────────────────────────────────
+    def route_color(row):
+
+        intensidade = str(
+            row.get("Intensidade", "Moderado")
+        )
+
+        return INTENSITY_COLORS.get(
+            intensidade,
+            BLUE
+        )
+
+    # ──────────────────────────────────────────────────────────────────────
+    # Renderiza atividades
+    # ──────────────────────────────────────────────────────────────────────
     for _, row in df_map.iterrows():
 
         coords = []
-        if poly_col and pd.notna(row[poly_col]):
-            coords = decode_polyline(row[poly_col])
 
-        laps = lps_run[lps_run["activity_id"] == row["id"]]
+        if poly_col and pd.notna(row[poly_col]):
+
+            try:
+                coords = decode_polyline(
+                    row[poly_col]
+                )
+            except Exception:
+                coords = []
+
+        laps = lps_run[
+            lps_run["activity_id"] == row["id"]
+        ]
+
         insights = analyze_run(laps)
 
         popup_html = f"""
         <b>{row['name']}</b><br>
-        {row['distance_km']:.1f} km<br>
-        Pace: {fmt_pace(row['pace_sec_km'])}/km<br>
+        📅 {row['start_date'].strftime('%d/%m/%Y')}<br>
+        📏 {row['distance_km']:.1f} km<br>
+        ⚡ Pace: {fmt_pace(row['pace_sec_km'])}/km<br>
+        ❤️ FC: {
+            f"{row['average_heartrate']:.0f} bpm"
+            if not pd.isna(row.get("average_heartrate"))
+            else "—"
+        }<br>
+        ⛰️ Elevação: {
+            f"{row['elevation_gain']:.0f} m"
+            if not pd.isna(row.get("elevation_gain"))
+            else "—"
+        }<br><br>
         {"<br>".join(insights)}
         """
 
+        color = route_color(row)
+
+        # ──────────────────────────────────────────────────────────────
+        # Rota completa
+        # ──────────────────────────────────────────────────────────────
         if coords:
+
             folium.PolyLine(
                 coords,
-                color="blue",
+                color=color,
                 weight=4,
-                popup=popup_html
+                opacity=0.85,
+                popup=folium.Popup(
+                    popup_html,
+                    max_width=320
+                ),
+                tooltip=row["name"]
             ).add_to(m)
+
+        # ──────────────────────────────────────────────────────────────
+        # Fallback marker
+        # ──────────────────────────────────────────────────────────────
         else:
+
             folium.CircleMarker(
-                [row["latitude"], row["longitude"]],
+                location=[
+                    row["latitude"],
+                    row["longitude"]
+                ],
                 radius=6,
-                color="blue",
-                popup=popup_html
+                color=color,
+                fill=True,
+                fill_opacity=0.9,
+                popup=folium.Popup(
+                    popup_html,
+                    max_width=320
+                ),
+                tooltip=row["name"]
             ).add_to(m)
 
-    st_folium(m, width="100%", height=500)
+    # ──────────────────────────────────────────────────────────────────────
+    # Render mapa
+    # ──────────────────────────────────────────────────────────────────────
+    st_folium(
+        m,
+        width="100%",
+        height=550
+    )
 
-    # COMPARAÇÃO AUTOMÁTICA
+    # ──────────────────────────────────────────────────────────────────────
+    # Comparação automática
+    # ──────────────────────────────────────────────────────────────────────
     if len(df_map) >= 2:
+
         st.markdown("### 🔍 Comparação")
 
-        melhor = df_map.loc[df_map["pace_sec_km"].idxmin()]
-        pior   = df_map.loc[df_map["pace_sec_km"].idxmax()]
+        valid_pace = df_map[
+            df_map["pace_sec_km"].notna()
+        ]
 
-        st.write(f"🏆 Melhor pace: {fmt_pace(melhor['pace_sec_km'])}/km")
-        st.write(f"📉 Pior pace: {fmt_pace(pior['pace_sec_km'])}/km")
+        if not valid_pace.empty:
+
+            melhor = valid_pace.loc[
+                valid_pace["pace_sec_km"].idxmin()
+            ]
+
+            pior = valid_pace.loc[
+                valid_pace["pace_sec_km"].idxmax()
+            ]
+
+            c1, c2 = st.columns(2)
+
+            with c1:
+                st.success(
+                    f"🏆 Melhor pace\n\n"
+                    f"{fmt_pace(melhor['pace_sec_km'])}/km\n\n"
+                    f"{melhor['name']}"
+                )
+
+            with c2:
+                st.warning(
+                    f"📉 Pace mais lento\n\n"
+                    f"{fmt_pace(pior['pace_sec_km'])}/km\n\n"
+                    f"{pior['name']}"
+                )
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  11 · HISTÓRICO
