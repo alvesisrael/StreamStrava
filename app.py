@@ -90,6 +90,8 @@ _KW_COMPILED: dict[str, re.Pattern] = {intensity: re.compile("|".join(re.escape(
 # ══════════════════════════════════════════════════════════════════════
 # 🔧 HELPERS + ANÁLISE (VERSÃO LIMPA)
 # ══════════════════════════════════════════════════════════════════════
+def ensure_datetime(series):
+    return pd.to_datetime(series, errors="coerce").dt.tz_localize(None)
 
 def haversine_km(c1, c2):
     la1, lo1 = math.radians(c1[0]), math.radians(c1[1])
