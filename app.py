@@ -560,6 +560,48 @@ def melhor_3km():
     return _melhor_3km_cached(laps_raw)
 
 
+@st.cache_data(ttl=86400*30, show_spinner=False)
+def _reverse_geocode(lat_r: float, lng_r: float) -> str:
+    """
+    Bairro, Cidade via Nominatim (OSM). Sem API key.
+    Cacheado 30 dias — só chama a API na 1ª vez por localização.
+    lat_r / lng_r: arredondados para 2 casas (~1 km de precisão).
+    """
+    try:
+        import requests
+        r = requests.get(
+            "https://nominatim.openstreetmap.org/reverse",
+            params={"lat": lat_r, "lon": lng_r, "format": "json", "zoom": 15},
+            headers={"User-Agent": "PerformanceRunDashboard/1.0"},
+            timeout=5,
+        )
+        if r.status_code == 200:
+            addr = r.json().get("address", {})
+            bairro = (addr.get("suburb") or addr.get("neighbourhood")
+                      or addr.get("quarter") or addr.get("city_district") or "")
+            cidade = (addr.get("city") or addr.get("town")
+                      or addr.get("village") or addr.get("municipality") or "")
+            parts = [p for p in [bairro, cidade] if p]
+            return ", ".join(parts)
+    except Exception:
+        pass
+    return ""
+
+
+def _start_coords(row, poly_col, has_ll):
+    """Extrai lat/lng do ponto de início da atividade."""
+    if poly_col and pd.notna(row.get(poly_col, None)):
+        pts = decode_polyline(str(row[poly_col]))
+        if pts:
+            return pts[0][0], pts[0][1]
+    if has_ll:
+        lat = row.get("latitude")
+        lng = row.get("longitude")
+        if pd.notna(lat) and pd.notna(lng):
+            return float(lat), float(lng)
+    return None, None
+
+
 def analyze_run(laps):
     """Gera insights textuais de uma atividade a partir dos seus laps."""
     insights = []
@@ -1736,7 +1778,9 @@ def _build_route_map_html(
                 f"<table style='font-size:11px;width:100%'>{rows}</table></div>")
 
     def _act_popup_html(a):
-        _, name, date, km, pace_sec, hr, elev, color, _, insights_str = a
+        _, name, date, km, pace_sec, hr, elev, color, _, insights_str, location = a
+        loc_block = (f"<div style='font-size:11px;color:#aaa;margin-bottom:4px'>"
+                     f"📍 {location}</div>") if location else ""
         rows = "".join(
             f"<tr><td style='color:#888;padding:2px 10px 2px 0'>{k}</td>"
             f"<td><b>{v}</b></td></tr>"
@@ -1751,7 +1795,8 @@ def _build_route_map_html(
                           + insights_str.replace("|", "<br>") + "</div>") if insights_str else ""
         return (f"<div style='font-family:sans-serif;min-width:190px;padding:2px'>"
                 f"<b style='font-size:13px'>{name[:32]}</b><br>"
-                f"<span style='color:#888;font-size:11px'>{date}</span>"
+                f"<span style='color:#888;font-size:11px'>{date}</span><br>"
+                f"{loc_block}"
                 f"<table style='font-size:12px;width:100%;margin-top:6px'>{rows}</table>"
                 f"{insights_block}</div>")
 
@@ -1852,13 +1897,27 @@ with tab_mapa:
         st.warning("Nenhuma atividade com GPS encontrada no período.")
         st.stop()
 
-    # Labels de seleção
+    # Pré-geocodifica todas as atividades visíveis (usa cache — só 1 chamada/local/30d)
+    _geo_cache: dict = {}
+    for _, _gr in df_map.iterrows():
+        _lat, _lng = _start_coords(_gr, poly_col, has_ll)
+        if _lat and _lng:
+            _key = (round(_lat, 2), round(_lng, 2))
+            if _key not in _geo_cache:
+                _geo_cache[_key] = _reverse_geocode(_key[0], _key[1])
+
+    # Labels de seleção (agora com 📍 bairro)
     def make_label(row):
         dt  = row["start_date"].strftime("%d/%m/%Y")
         km  = float(row.get("distance_km") or 0)
         tag = f" [{row['Intensidade']}]" \
               if "Intensidade" in row and str(row["Intensidade"]) not in ("","None","nan") else ""
-        return f"{dt} — {row['name'][:35]} ({km:.1f} km){tag}"
+        _lat, _lng = _start_coords(row, poly_col, has_ll)
+        loc = ""
+        if _lat and _lng:
+            loc_str = _geo_cache.get((round(_lat, 2), round(_lng, 2)), "")
+            loc = f" · 📍 {loc_str}" if loc_str else ""
+        return f"{dt} — {row['name'][:28]} ({km:.1f} km){tag}{loc}"
 
     label_map      = {make_label(r): r["id"] for _, r in df_map.iterrows()}
     labels         = list(label_map.keys())
@@ -1904,6 +1963,12 @@ with tab_mapa:
             _route_color(row),
             str(row[poly_col]) if poly_col and pd.notna(row.get(poly_col)) else "",
             "|".join(analyze_run(lps_run[lps_run["activity_id"] == row["id"]])),
+            # bairro/cidade — já pré-geocodificado no _geo_cache
+            _geo_cache.get(
+                (round(_slat, 2), round(_slng, 2)), ""
+            ) if (_slat := _start_coords(row, poly_col, has_ll)[0])
+              and (_slng := _start_coords(row, poly_col, has_ll)[1])
+            else "",
         )
         for _, row in df_map.iterrows()
     )
