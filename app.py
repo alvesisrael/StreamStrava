@@ -650,9 +650,19 @@ def filt_laps(d):
     ]
 
 def filt_be(d):
-    if d.empty: return d
-    return d[(d["start_date"] >= s_dt) & (d["start_date"] <= e_dt)
-             & d["activity_sport_type"].isin(selected_sports)].copy()
+    if d.empty:
+        return d
+
+    d = d.copy()
+    d["start_date"] = pd.to_datetime(d["start_date"], errors="coerce")
+
+    s = pd.to_datetime(s_dt)
+    e = pd.to_datetime(e_dt) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+
+    return d[
+        (d["start_date"] >= s) &
+        (d["start_date"] <= e)
+    ]
 
 df      = filt_act(df_raw)
 laps    = filt_laps(laps_raw)
