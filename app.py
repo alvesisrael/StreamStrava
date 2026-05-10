@@ -559,6 +559,35 @@ def melhor_3km():
     return _melhor_3km_cached(laps_raw)
 
 
+def analyze_run(laps):
+    """Gera insights textuais de uma atividade a partir dos seus laps."""
+    insights = []
+    if laps.empty:
+        return insights
+    if len(laps) >= 4 and "pace_sec_km" in laps.columns:
+        first  = laps["pace_sec_km"].iloc[:len(laps)//2].mean()
+        second = laps["pace_sec_km"].iloc[len(laps)//2:].mean()
+        delta  = second - first
+        if delta > 10:
+            insights.append(f"⚠️ Queda de ritmo (+{delta:.0f}s/km)")
+        elif delta < -10:
+            insights.append(f"🚀 Negative split ({abs(delta):.0f}s/km)")
+    if "average_heartrate" in laps.columns and laps["average_heartrate"].notna().any():
+        first  = laps["average_heartrate"].iloc[:len(laps)//2].mean()
+        second = laps["average_heartrate"].iloc[len(laps)//2:].mean()
+        drift  = second - first
+        if drift > 5:
+            insights.append(f"❤️ Deriva cardíaca (+{drift:.0f} bpm)")
+    if "pace_sec_km" in laps.columns and laps["pace_sec_km"].notna().any():
+        var = laps["pace_sec_km"].std()
+        if not pd.isna(var):
+            if var < 8:
+                insights.append("💪 Ritmo consistente")
+            elif var > 20:
+                insights.append("⚠️ Ritmo irregular")
+    return insights
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 
 tab_hoje, tab_desemp, tab_carga, tab_mapa, tab_hist = st.tabs([
@@ -1958,18 +1987,18 @@ with tab_hist:
                     "average_heartrate":"FC Média","max_heartrate":"FC Máx",
                     "total_elevation_gain":"Elev (m)","average_cadence":"Cadência"}
                 df_laps_tab = laps_ativ[[c for c in cols_lap if c in laps_ativ.columns]].copy()
-                df_laps_tab["pace_sec_km"]          = fmt_pace_vec(df_laps_tab["pace_sec_km"])
-                df_laps_tab["moving_time_sec"]       = df_laps_tab["moving_time_sec"].apply(
+                df_laps_tab["pace_sec_km"]         = fmt_pace_vec(df_laps_tab["pace_sec_km"])
+                df_laps_tab["moving_time_sec"]      = df_laps_tab["moving_time_sec"].apply(
                     lambda x: f"{int(x//60)}:{int(x%60):02d}" if not pd.isna(x) else "—")
-                df_laps_tab["distance_m"]            = df_laps_tab["distance_m"].apply(
+                df_laps_tab["distance_m"]           = df_laps_tab["distance_m"].apply(
                     lambda x: f"{x:.0f}" if not pd.isna(x) else "—")
-                df_laps_tab["average_heartrate"]     = df_laps_tab["average_heartrate"].apply(
+                df_laps_tab["average_heartrate"]    = df_laps_tab["average_heartrate"].apply(
                     lambda x: f"{x:.0f}" if not pd.isna(x) else "—")
-                df_laps_tab["max_heartrate"]         = df_laps_tab["max_heartrate"].apply(
+                df_laps_tab["max_heartrate"]        = df_laps_tab["max_heartrate"].apply(
                     lambda x: f"{x:.0f}" if not pd.isna(x) else "—")
-                df_laps_tab["total_elevation_gain"]  = df_laps_tab["total_elevation_gain"].apply(
+                df_laps_tab["total_elevation_gain"] = df_laps_tab["total_elevation_gain"].apply(
                     lambda x: f"{x:.1f}" if not pd.isna(x) else "—")
-                df_laps_tab["average_cadence"]       = df_laps_tab["average_cadence"].apply(
+                df_laps_tab["average_cadence"]      = df_laps_tab["average_cadence"].apply(
                     lambda x: f"{x*2:.0f} spm" if not pd.isna(x) else "—")
                 df_laps_tab = df_laps_tab.rename(columns=cols_lap)
                 st.dataframe(df_laps_tab, hide_index=True, width="stretch")
