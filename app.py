@@ -266,11 +266,25 @@ def elev_gain_to_hex(elev_per_km):
 
 
 # ── INTENSIDADE ──────────────────────────────────────────────────────
-def cat_intensity(val):
-    if val is None or (isinstance(val, float) and pd.isna(val)):
-        return "Moderado"
-    val = str(val).strip().title()
-    return val if val in INTENSITY_COLORS else "Moderado"
+def cat_intensity(df):
+    if df is None or df.empty:
+        return pd.DataFrame({"Intensidade": []})
+
+    df = df.copy()
+
+    # garante coluna
+    if "Intensidade" not in df.columns:
+        df["Intensidade"] = None
+
+    # normaliza
+    df["Intensidade"] = (
+        df["Intensidade"]
+        .astype("object")
+        .fillna("Desconhecido")
+        .replace("Nan", "Desconhecido")
+    )
+
+    return df
 
 
 def zona_fc_vec(series):
@@ -745,35 +759,67 @@ with tab_geral:
     st.markdown("---")
 
     col_a, col_b = st.columns(2)
-    with col_a:
-        df_m = (df.groupby(["MesAnoOrd","MesAno"])
-                  .agg(KM=("distance_km","sum")).reset_index()
-                  .sort_values("MesAnoOrd"))
-        fig = px.bar(df_m, x="MesAno", y="KM",
-                     title="📏 Distância por Mês (km)",
-                     color_discrete_sequence=[BLUE],
-                     labels={"KM":"km","MesAno":""}, text_auto=".0f")
-        fig.update_traces(textposition="outside")
-        fig.update_layout(xaxis_tickangle=-45, showlegend=False)
-        st.plotly_chart(fig, width="stretch")
     with col_b:
-        if "Intensidade" in df.columns and df["Intensidade"].notna().any():
-            df_i = cat_intensity(df)["Intensidade"].value_counts().reset_index()
-            df_i.columns = ["Intensidade","Qtd"]
+        # 🔒 garante estrutura mínima
+        if df is None or df.empty:
+            st.info("Sem dados para calcular intensidade.")
+        else:
+            df_ci = cat_intensity(df)
+
+            if not isinstance(df_ci, pd.DataFrame):
+                st.error("cat_intensity não retornou um DataFrame.")
+                st.stop()
+
+            if "Intensidade" not in df_ci.columns:
+                st.error("Coluna 'Intensidade' não encontrada após processamento.")
+                st.stop()
+
+            # 🔥 normaliza de vez (evita erro silencioso)
+            df_ci["Intensidade"] = (
+                df_ci["Intensidade"]
+                .astype("object")
+                .fillna("Desconhecido")
+                .replace("Nan", "Desconhecido")
+            )
+
+            # 📊 contagem
+            df_i = (
+                df_ci["Intensidade"]
+                .value_counts()
+                .rename_axis("Intensidade")
+                .reset_index(name="Qtd")
+            )
+
+            # mantém só categorias conhecidas
             df_i = df_i[df_i["Intensidade"].isin(INTENSITY_ORDER)]
-            fig = px.pie(df_i, names="Intensidade", values="Qtd",
-                         title="🎯 Mix de Intensidade", hole=0.42,
-                         color="Intensidade", color_discrete_map=INTENSITY_COLORS,
-                         category_orders={"Intensidade": INTENSITY_ORDER})
-            fig.update_traces(textposition="inside", textinfo="percent+label")
-            st.plotly_chart(fig, width="stretch")
+
+            if df_i.empty:
+                st.info("Sem dados válidos de intensidade.")
+            else:
+                fig = px.pie(
+                    df_i,
+                    names="Intensidade",
+                    values="Qtd",
+                    title="🎯 Mix de Intensidade",
+                    hole=0.42,
+                    color="Intensidade",
+                    color_discrete_map=INTENSITY_COLORS,
+                    category_orders={"Intensidade": INTENSITY_ORDER}
+                )
+
+                fig.update_traces(textposition="inside", textinfo="percent+label")
+                st.plotly_chart(fig, width="stretch")
+
+            # 📘 explicação
             label = "🤖 Automática (FC)" if int_mode == "Automática (FC)" else "✍️ Manual"
+
             with st.expander(f"Como cada categoria é definida? — {label}"):
                 if int_mode == "Automática (FC)":
                     st.markdown(
                         "**1ª — Nome da atividade:** palavras-chave têm prioridade.\n\n"
                         "**2ª — Zonas de FC relativas ao FCmax** (fallback)."
                     )
+
                     criterios = {
                         "🟢 Leve":           "Z1+Z2 ≥ 75%  *(< 78% FCmax)*",
                         "🔵 Moderado":       "Demais casos",
@@ -781,8 +827,10 @@ with tab_geral:
                         "🟠 Forte":          "Z4+Z5 ≥ 30%",
                         "🔴 Muito Forte":    "Z5 ≥ 20% **ou** Z4+Z5 ≥ 50%",
                     }
+
                     for cat, criterio in criterios.items():
                         st.markdown(f"**{cat}** → {criterio}")
+
                 else:
                     st.markdown("Modo **Manual** — coluna `Intensidade` preenchida manualmente.")
 
