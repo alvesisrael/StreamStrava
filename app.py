@@ -1594,7 +1594,7 @@ with tab_mapa:
             def _render_folium():
                 _MODES = ["Intensidade","Pace","BPM","Elevacao"]
                 mode_map = st.radio("Colorir rotas por", _MODES, horizontal=True)
-                tile_map = st.radio("Mapa base",["Claro","Escuro","Topográfico","Satélite","Topo ESRI","Voyager"],horizontal=True)
+                tile_map = st.radio("Mapa",["Claro","Satélite"],horizontal=True)
 
                 # ── helpers de km ─────────────────────────────────────────────
                 def _hav_seg(c1, c2):
