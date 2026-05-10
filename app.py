@@ -651,15 +651,15 @@ with tab_hoje:
     st.caption("**Forma atual** — baseada em todo o histórico (independente do filtro de período)")
     ca, cb, cc, cd = st.columns(4)
     ca.metric("⚡ ACWR (7d)",     f"{acwr:.2f}", acwr_lbl, delta_color=acwr_cor,
-              help="Acute:Chronic Workload Ratio — razão entre a carga dos últimos 7 dias e a média das 4 semanas anteriores. "
-                   "Zona segura: 0,8–1,3. Abaixo de 0,8 = subcarregado (espaço para aumentar). "
-                   "Acima de 1,3 = atenção. Acima de 1,5 = alto risco de lesão por overload.")
+              help="Acute:Chronic Workload Ratio — razão entre a carga dos últimos 7 dias e a média das 4 semanas anteriores.\n\n"
+     "Zona segura: 0,8–1,3.\n\n"
+     "Abaixo de 0,8 = subcarregado (espaço para aumentar).\n\n"
+     "Acima de 1,3 = atenção.\n\n"
+     "Acima de 1,5 = alto risco de lesão por overload.")
+
     cb.metric("✨ TSB — Forma",    f"{tsb_at:+.0f}", tsb_lbl,
               delta_color="normal" if tsb_at >= 0 else "inverse",
-              help="Training Stress Balance = CTL − ATL (Fitness − Fadiga). "
-                   "Positivo = atleta descansado. Negativo = fatigado. "
-                   "Janela ideal para provas e treinos de qualidade: entre +5 e +20. "
-                   "Abaixo de −20 = risco de overtraining.")
+              help="TSB = CTL − ATL (Fitness − Fadiga)  •  +5 a +20: janela de pico  •  0 a −10: treinando  •  abaixo de −20: overtraining")
     cc.metric("💪 CTL — Fitness",  f"{ctl_at:.0f}",
               help="Chronic Training Load — carga crônica calculada por média exponencial dos últimos 42 dias "
                    "sobre o suffer score. Representa sua base de condicionamento: quanto maior, maior o motor aeróbico.")
