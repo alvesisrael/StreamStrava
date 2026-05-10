@@ -1592,11 +1592,9 @@ with tab_mapa:
 
             @_frag
             def _render_folium():
-                _MODES = ["Intensidade","Pace (rapido/lento)","FC por zona","Elevacao por segmento"]
+                _MODES = ["Intensidade","Pace","BPM","Elevacao"]
                 mode_map = st.radio("Colorir rotas por", _MODES, horizontal=True)
-                tile_map = st.radio("Mapa base",
-                    ["Claro","Escuro","Topográfico","Satélite","Topo ESRI","Voyager"],
-                    horizontal=True)
+                tile_map = st.radio("Mapa base",["Claro","Escuro","Topográfico","Satélite","Topo ESRI","Voyager"],horizontal=True)
 
                 # ── helpers de km ─────────────────────────────────────────────
                 def _hav_seg(c1, c2):
@@ -1636,30 +1634,32 @@ with tab_mapa:
                 ESRI_TOPO_ATTR = "Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ, TomTom, Intermap, iPC, USGS, FAO, NPS, NRCAN, GeoBase, Kadaster NL, Ordnance Survey, Esri Japan, METI, Esri China (Hong Kong), and the GIS User Community"
 
                 m = folium.Map(location=[lat_c, lng_c], zoom_start=13, tiles=None)
-                tiles = {
-                    "Claro":      lambda: folium.TileLayer("CartoDB positron", name="Claro"),
-                    "Escuro":     lambda: folium.TileLayer("CartoDB dark_matter", name="Escuro"),
-                    "Topográfico":lambda: folium.TileLayer("OpenTopoMap", name="Topográfico"),
-                    "Satélite":   lambda: folium.TileLayer(ESRI_SAT_URL, attr=ESRI_SAT_ATTR, name="Satélite ESRI"),
-                    "Topo ESRI":  lambda: folium.TileLayer(ESRI_TOPO_URL, attr=ESRI_TOPO_ATTR, name="Topo ESRI"),
-                    "Voyager":    lambda: folium.TileLayer("CartoDB Voyager", name="Voyager"),
-                }
+                tiles = {"Claro":lambda: folium.TileLayer("CartoDB positron", name="Claro"),"Satélite":lambda: folium.TileLayer(ESRI_SAT_URL, attr=ESRI_SAT_ATTR,name="Satélite ESRI")}
+                
+                # tiles = {
+                #     "Claro":      lambda: folium.TileLayer("CartoDB positron", name="Claro"),
+                #     "Escuro":     lambda: folium.TileLayer("CartoDB dark_matter", name="Escuro"),
+                #     "Topográfico":lambda: folium.TileLayer("OpenTopoMap", name="Topográfico"),
+                #     "Satélite":   lambda: folium.TileLayer(ESRI_SAT_URL, attr=ESRI_SAT_ATTR, name="Satélite ESRI"),
+                #     "Topo ESRI":  lambda: folium.TileLayer(ESRI_TOPO_URL, attr=ESRI_TOPO_ATTR, name="Topo ESRI"),
+                #     "Voyager":    lambda: folium.TileLayer("CartoDB Voyager", name="Voyager"),
+                # }
+                
                 tiles.get(tile_map, tiles["Claro"])().add_to(m)
 
                 try:
                     from folium.plugins import AntPath, MiniMap
-                    MiniMap(toggle_display=True, position="bottomleft",
-                            tile_layer="CartoDB positron", zoom_level_offset=-5).add_to(m)
+                    MiniMap(toggle_display=True, position="bottomleft",tile_layer="CartoDB positron", zoom_level_offset=-5).add_to(m)
                     _ant = True
                 except Exception:
                     _ant = False
 
                 def _seg_color(lap, r, mode):
-                    if mode == "Pace (rapido/lento)":
+                    if mode == "Pace":
                         return pace_to_hex(lap.get("pace_sec_km", r["pace_sec"]))
-                    if mode == "FC por zona":
+                    if mode == "BPM":
                         return fc_to_hex(lap.get("average_heartrate", r["hr"]))
-                    if mode == "Elevacao por segmento":
+                    if mode == "Elevacao":
                         d = float(lap.get("distance_km") or 1)
                         e = float(lap.get("total_elevation_gain") or 0)
                         return elev_gain_to_hex(e / d if d > 0 else 0)
