@@ -21,6 +21,8 @@ try:
 except ImportError:
     HAS_FOLIUM = False
 
+import streamlit.components.v1 as components
+
 st.set_page_config(page_title="PerformanceRun 🏃", page_icon="🏃", layout="wide", initial_sidebar_state="collapsed")
 
 st.markdown("""<style>
@@ -1713,95 +1715,236 @@ with tab_coach:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  HELPER: constrói HTML do mapa Folium — CACHEADO por seleção + tile
+#  Coloca fora do with tab_mapa para o cache funcionar entre reruns.
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _haversine_km(c1, c2):
+    la1, lo1 = math.radians(c1[0]), math.radians(c1[1])
+    la2, lo2 = math.radians(c2[0]), math.radians(c2[1])
+    d = math.sin((la2-la1)/2)**2 + math.cos(la1)*math.cos(la2)*math.sin((lo2-lo1)/2)**2
+    return 2 * 6371 * math.asin(math.sqrt(d))
+
+
+@st.cache_data(show_spinner=False, max_entries=80)
+def _build_route_map_html(
+    act_data:  tuple,   # ((id, name, date_str, km, pace_sec, hr, elev, color, poly_str, insights_str), ...)
+    laps_data: tuple,   # ((act_id, lap_idx, dist_km, pace_sec, hr, max_hr, elev_gain, time_sec), ...)
+    lat_c: float,
+    lng_c: float,
+    tile: str,
+    height: int,
+) -> str:
+    """
+    Constrói o HTML completo do mapa Folium e devolve como string cacheada.
+    Pan / zoom / cliques ficam 100% no browser — sem rerun Python.
+    """
+    from collections import defaultdict
+
+    ESRI_SAT  = ("https://server.arcgisonline.com/ArcGIS/rest/services/"
+                 "World_Imagery/MapServer/tile/{z}/{y}/{x}", "Tiles © Esri")
+    ESRI_TOPO = ("https://server.arcgisonline.com/ArcGIS/rest/services/"
+                 "World_Topo_Map/MapServer/tile/{z}/{y}/{x}", "Tiles © Esri")
+    TILES = {
+        "Claro":       lambda m: folium.TileLayer("CartoDB positron",    name="Claro").add_to(m),
+        "Escuro":      lambda m: folium.TileLayer("CartoDB dark_matter", name="Escuro").add_to(m),
+        "Satélite":    lambda m: folium.TileLayer(ESRI_SAT[0],  attr=ESRI_SAT[1],  name="Sat").add_to(m),
+        "Topográfico": lambda m: folium.TileLayer("OpenTopoMap",          name="Topo").add_to(m),
+        "Topo ESRI":   lambda m: folium.TileLayer(ESRI_TOPO[0], attr=ESRI_TOPO[1], name="TopoE").add_to(m),
+    }
+
+    m = folium.Map(location=[lat_c, lng_c], zoom_start=13, tiles=None, control_scale=True)
+    TILES.get(tile, TILES["Claro"])(m)
+
+    try:
+        from folium.plugins import MiniMap
+        MiniMap(toggle_display=True, position="bottomleft",
+                tile_layer="CartoDB positron", zoom_level_offset=-5).add_to(m)
+    except Exception:
+        pass
+
+    # Indexa laps por atividade
+    laps_by_act = defaultdict(list)
+    for lap in laps_data:
+        laps_by_act[lap[0]].append(lap)
+
+    def _fmt(sec):
+        if not sec or sec <= 0: return "—"
+        s = int(sec); return f"{s//60}:{s%60:02d}"
+
+    def _km_markers(coords, color, fg):
+        """Marcadores numéricos a cada 1 km ao longo da rota."""
+        cum, last_km = 0.0, 0
+        for i in range(1, len(coords)):
+            cum += _haversine_km(coords[i-1], coords[i])
+            km_int = int(cum)
+            if km_int > last_km:
+                last_km = km_int
+                folium.Marker(
+                    coords[i],
+                    icon=folium.DivIcon(
+                        html=(f"<div style='font-size:9px;font-weight:700;color:#fff;"
+                              f"background:{color};padding:1px 5px;border-radius:10px;"
+                              f"box-shadow:0 1px 3px rgba(0,0,0,.55);white-space:nowrap'>"
+                              f"{km_int} km</div>"),
+                        icon_size=(44, 16), icon_anchor=(22, 8),
+                    ),
+                ).add_to(fg)
+
+    def _lap_popup_html(lap, name, date, color):
+        lap_idx, dist_km, pace_sec, hr, max_hr, elev_gain, time_sec = lap[1:]
+        rows = "".join(
+            f"<tr><td style='color:#888;padding:1px 8px 1px 0'>{k}</td>"
+            f"<td><b>{v}</b></td></tr>"
+            for k, v in [
+                ("Lap",       str(int(lap_idx))),
+                ("Distância", f"{dist_km:.2f} km"),
+                ("Pace",      f"{_fmt(pace_sec)}/km"),
+                ("Tempo",     _fmt(time_sec)),
+                ("FC média",  f"{int(hr)} bpm"     if hr     > 0 else "—"),
+                ("FC máx",    f"{int(max_hr)} bpm" if max_hr > 0 else "—"),
+                ("Elevação",  f"{elev_gain:.0f} m" if elev_gain  else "—"),
+            ]
+        )
+        return (f"<div style='font-family:sans-serif;min-width:175px;padding:2px'>"
+                f"<b style='font-size:12px'>{name[:28]}</b>"
+                f"<span style='color:#888;font-size:10px'> · {date}</span><br>"
+                f"<div style='margin:4px 0 6px;padding:2px 7px;border-radius:4px;"
+                f"background:{color}22;border-left:3px solid {color};"
+                f"font-size:11px;font-weight:600'>Lap {int(lap_idx)} · {dist_km:.2f} km</div>"
+                f"<table style='font-size:11px;width:100%'>{rows}</table></div>")
+
+    def _act_popup_html(a):
+        _, name, date, km, pace_sec, hr, elev, color, _, insights_str = a
+        rows = "".join(
+            f"<tr><td style='color:#888;padding:2px 10px 2px 0'>{k}</td>"
+            f"<td><b>{v}</b></td></tr>"
+            for k, v in [
+                ("Distância", f"{km:.1f} km"),
+                ("Pace",      f"{_fmt(pace_sec)}/km"),
+                ("FC média",  f"{int(hr)} bpm" if hr   > 0 else "—"),
+                ("Elevação",  f"{elev:.0f} m"  if elev > 0 else "—"),
+            ]
+        )
+        insights_block = (f"<div style='margin-top:6px;font-size:11px;color:#555'>"
+                          + insights_str.replace("|", "<br>") + "</div>") if insights_str else ""
+        return (f"<div style='font-family:sans-serif;min-width:190px;padding:2px'>"
+                f"<b style='font-size:13px'>{name[:32]}</b><br>"
+                f"<span style='color:#888;font-size:11px'>{date}</span>"
+                f"<table style='font-size:12px;width:100%;margin-top:6px'>{rows}</table>"
+                f"{insights_block}</div>")
+
+    for a in act_data:
+        act_id, name, date, km, pace_sec, hr, elev, color, poly_str, _ = a
+        coords = decode_polyline(poly_str) if poly_str else []
+
+        fg = folium.FeatureGroup(name=f"{date} — {name[:22]} ({km:.1f} km)", show=True)
+
+        if coords:
+            n_pts = len(coords) - 1
+
+            # Rota animada (AntPath) com popup resumo
+            try:
+                from folium.plugins import AntPath
+                AntPath(coords, color=color, weight=4.5, dash_array=[12, 20],
+                        delay=800, opacity=0.92,
+                        popup=folium.Popup(_act_popup_html(a), max_width=250)).add_to(fg)
+            except Exception:
+                folium.PolyLine(coords, color=color, weight=4.5, opacity=0.9,
+                                popup=folium.Popup(_act_popup_html(a), max_width=250)).add_to(fg)
+
+            # Marcadores de km
+            _km_markers(coords, color, fg)
+
+            # Overlays invisíveis por lap — clique mostra detalhes do lap
+            act_laps = sorted(laps_by_act.get(act_id, []), key=lambda x: x[1])
+            if act_laps:
+                total_dist = sum(l[2] for l in act_laps) or 1
+                cum_frac   = 0.0
+                for lap in act_laps:
+                    frac = lap[2] / total_dist
+                    i0   = int(cum_frac * n_pts)
+                    i1   = min(n_pts, int((cum_frac + frac) * n_pts) + 1)
+                    seg  = coords[i0:i1 + 1]
+                    if len(seg) >= 2:
+                        folium.PolyLine(
+                            seg, color=color, weight=14, opacity=0.001,
+                            popup=folium.Popup(_lap_popup_html(lap, name, date, color), max_width=230),
+                            tooltip=f"Lap {int(lap[1])} · {_fmt(lap[3])}/km",
+                        ).add_to(fg)
+                    cum_frac += frac
+            else:
+                # sem laps: overlay único com popup geral
+                folium.PolyLine(coords, color=color, weight=14, opacity=0.001,
+                                popup=folium.Popup(_act_popup_html(a), max_width=250)).add_to(fg)
+
+            # Ponto de início
+            folium.CircleMarker(coords[0], radius=6, color=color,
+                                fill=True, fill_opacity=1.0, weight=2,
+                                tooltip="Início").add_to(fg)
+
+        else:
+            # Fallback: apenas ponto lat/lng
+            lat_f = hr   # reaproveitado — ver serialização abaixo; usar coluna correta
+            lng_f = elev
+            folium.CircleMarker(
+                location=[lat_f, lng_f], radius=8, color=color,
+                fill=True, fill_opacity=0.9,
+                popup=folium.Popup(_act_popup_html(a), max_width=250),
+                tooltip=name,
+            ).add_to(fg)
+
+        fg.add_to(m)
+
+    folium.LayerControl(collapsed=False, position="topright").add_to(m)
+    return m._repr_html_()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  10 · MAPA DE ROTAS
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_mapa:
 
     st.title("🗺️ Mapa de Rotas")
 
-    # ──────────────────────────────────────────────────────────────────────
     # Detecta coluna de polyline
-    # ──────────────────────────────────────────────────────────────────────
-    POLY_CANDIDATES = [
-        "map_polyline",
-        "polyline",
-        "map.polyline",
-        "summary_polyline",
-        "map_summary_polyline"
-    ]
-
+    POLY_CANDIDATES = ["map_polyline","polyline","map.polyline",
+                       "summary_polyline","map_summary_polyline"]
     poly_col = next(
-        (
-            c for c in POLY_CANDIDATES
-            if c in df_raw.columns and df_raw[c].notna().any()
-        ),
-        None
-    )
-
-    has_ll = (
-        "latitude" in df_run.columns and
-        "longitude" in df_run.columns
-    )
+        (c for c in POLY_CANDIDATES if c in df_raw.columns and df_raw[c].notna().any()),
+        None)
+    has_ll = "latitude" in df_run.columns and "longitude" in df_run.columns
 
     if not has_ll and poly_col is None:
         st.error("Nenhum dado de GPS encontrado.")
         st.stop()
 
-    # ──────────────────────────────────────────────────────────────────────
-    # Filtra atividades válidas
-    # ──────────────────────────────────────────────────────────────────────
+    # Filtra atividades com GPS válido
     df_map = df_run.copy()
-
     if poly_col:
-        df_map = df_map[
-            df_map[poly_col].notna() &
-            (df_map[poly_col].astype(str).str.len() > 4)
-        ]
-    else:
-        df_map = df_map.dropna(subset=["latitude", "longitude"])
-
+        df_map = df_map[df_map[poly_col].notna() & (df_map[poly_col].astype(str).str.len() > 4)]
+    elif has_ll:
+        df_map = df_map.dropna(subset=["latitude","longitude"])
     df_map = df_map.sort_values("start_date", ascending=False)
 
     if df_map.empty:
-        st.warning("Nenhuma atividade com GPS encontrada.")
+        st.warning("Nenhuma atividade com GPS encontrada no período.")
         st.stop()
 
-    # ──────────────────────────────────────────────────────────────────────
     # Labels de seleção
-    # ──────────────────────────────────────────────────────────────────────
     def make_label(row):
+        dt  = row["start_date"].strftime("%d/%m/%Y")
+        km  = float(row.get("distance_km") or 0)
+        tag = f" [{row['Intensidade']}]" \
+              if "Intensidade" in row and str(row["Intensidade"]) not in ("","None","nan") else ""
+        return f"{dt} — {row['name'][:35]} ({km:.1f} km){tag}"
 
-        dt = row["start_date"].strftime("%d/%m/%Y")
-        km = row.get("distance_km", 0)
-
-        intensidade = str(
-            row.get("Intensidade", "")
-        )
-
-        tag = (
-            f" [{intensidade}]"
-            if intensidade and intensidade != "None"
-            else ""
-        )
-
-        return (
-            f"{dt} — "
-            f"{row['name'][:35]} "
-            f"({km:.1f} km)"
-            f"{tag}"
-        )
-
-    label_map = {
-        make_label(r): r["id"]
-        for _, r in df_map.iterrows()
-    }
-
-    labels = list(label_map.keys())
-
+    label_map      = {make_label(r): r["id"] for _, r in df_map.iterrows()}
+    labels         = list(label_map.keys())
     selected_labels = st.multiselect(
         "Selecione atividades",
         options=labels,
-        default=labels[:min(2, len(labels))],
+        default=labels[:min(5, len(labels))],
         placeholder="Buscar atividade...",
     )
 
@@ -1809,170 +1952,110 @@ with tab_mapa:
         st.info("Selecione ao menos uma atividade.")
         st.stop()
 
-    selected_ids = [
-        label_map[l]
-        for l in selected_labels
-    ]
+    selected_ids = [label_map[l] for l in selected_labels]
+    df_map       = df_map[df_map["id"].isin(selected_ids)].copy()
+    st.caption(f"**{len(df_map)}** atividade(s) selecionada(s) · {len(labels)} disponíveis no período")
 
-    df_map = df_map[
-        df_map["id"].isin(selected_ids)
-    ].copy()
+    # Centro do mapa (via polyline ou lat/lng)
+    if poly_col and not df_map.empty:
+        _s = decode_polyline(df_map[poly_col].dropna().iloc[0])
+        lat_c = _s[0][0] if _s else -23.55
+        lng_c = _s[0][1] if _s else -46.63
+    elif has_ll and df_map["latitude"].notna().any():
+        lat_c = float(df_map["latitude"].dropna().mean())
+        lng_c = float(df_map["longitude"].dropna().mean())
+    else:
+        lat_c, lng_c = -23.55, -46.63
 
-    st.caption(
-        f"{len(df_map)} atividade(s) selecionada(s)"
+    # Serializa dados para o cache (apenas tipos imutáveis/hashable)
+    def _route_color(row):
+        return INTENSITY_COLORS.get(str(row.get("Intensidade") or "Moderado"), BLUE)
+
+    act_data = tuple(
+        (
+            row["id"],
+            str(row.get("name") or ""),
+            row["start_date"].strftime("%d/%m/%Y"),
+            float(row.get("distance_km") or 0),
+            float(row.get("pace_sec_km") or 0),
+            float(row.get("average_heartrate") or 0),
+            float(row.get("elevation_gain") or 0),
+            _route_color(row),
+            str(row[poly_col]) if poly_col and pd.notna(row.get(poly_col)) else "",
+            "|".join(analyze_run(lps_run[lps_run["activity_id"] == row["id"]])),
+        )
+        for _, row in df_map.iterrows()
     )
 
-    # ──────────────────────────────────────────────────────────────────────
-    # Centro do mapa
-    # ──────────────────────────────────────────────────────────────────────
-    lat_c = df_map["latitude"].mean()
-    lng_c = df_map["longitude"].mean()
+    _laps_sel = lps_run[lps_run["activity_id"].isin(selected_ids)] \
+                if not lps_run.empty else pd.DataFrame()
+    laps_data = tuple(
+        (
+            row["activity_id"],
+            int(row.get("lap_index") or 0),
+            float(row.get("distance_km") or 0),
+            float(row.get("pace_sec_km") or 0),
+            float(row.get("average_heartrate") or 0),
+            float(row.get("max_heartrate") or 0),
+            float(row.get("total_elevation_gain") or 0),
+            float(row.get("moving_time_sec") or 0),
+        )
+        for _, row in _laps_sel.iterrows()
+    ) if not _laps_sel.empty else ()
 
-    m = folium.Map(
-        location=[lat_c, lng_c],
-        zoom_start=12,
-        control_scale=True
-    )
+    # Controles + render do mapa via st.fragment
+    # (só este bloco re-executa ao trocar tile/expandir — não o script todo)
+    try:
+        _frag = st.fragment
+    except AttributeError:
+        def _frag(f): return f
 
-    # ──────────────────────────────────────────────────────────────────────
-    # Cor por intensidade
-    # ──────────────────────────────────────────────────────────────────────
-    def route_color(row):
+    @_frag
+    def _map_controls():
+        col1, col2 = st.columns([4, 1])
+        with col1:
+            tile = st.radio("Mapa base",
+                            ["Claro","Escuro","Satélite","Topográfico","Topo ESRI"],
+                            horizontal=True, key="mapa_tile",
+                            help="Satélite/Topo ESRI: ótimos para trail.")
+        with col2:
+            st.markdown("<br>", unsafe_allow_html=True)
+            expand = st.checkbox("🔍 Ampliar", value=False, key="mapa_expand")
 
-        intensidade = str(
-            row.get("Intensidade", "Moderado")
+        height = 720 if expand else 550
+
+        # Constrói (ou recupera do cache) o HTML — instantâneo na 2ª chamada
+        with st.spinner("Preparando mapa…"):
+            html_map = _build_route_map_html(
+                act_data=act_data, laps_data=laps_data,
+                lat_c=lat_c, lng_c=lng_c, tile=tile, height=height)
+
+        # Renderiza dentro de iframe: pan/zoom/clique não disparam rerun Python
+        components.html(html_map, height=height, scrolling=False)
+        st.caption(
+            "🖱️ **Clique na rota** para detalhes do lap · "
+            "🔢 Números = km percorridos · "
+            "🗂️ Controle de camadas no canto superior direito do mapa · "
+            "⚡ Mapa cacheado — trocar de aba não recarrega"
         )
 
-        return INTENSITY_COLORS.get(
-            intensidade,
-            BLUE
-        )
+    _map_controls()
 
-    # ──────────────────────────────────────────────────────────────────────
-    # Renderiza atividades
-    # ──────────────────────────────────────────────────────────────────────
-    for _, row in df_map.iterrows():
-
-        coords = []
-
-        if poly_col and pd.notna(row[poly_col]):
-
-            try:
-                coords = decode_polyline(
-                    row[poly_col]
-                )
-            except Exception:
-                coords = []
-
-        laps = lps_run[
-            lps_run["activity_id"] == row["id"]
-        ]
-
-        insights = analyze_run(laps)
-
-        popup_html = f"""
-        <b>{row['name']}</b><br>
-        📅 {row['start_date'].strftime('%d/%m/%Y')}<br>
-        📏 {row['distance_km']:.1f} km<br>
-        ⚡ Pace: {fmt_pace(row['pace_sec_km'])}/km<br>
-        ❤️ FC: {
-            f"{row['average_heartrate']:.0f} bpm"
-            if not pd.isna(row.get("average_heartrate"))
-            else "—"
-        }<br>
-        ⛰️ Elevação: {
-            f"{row['elevation_gain']:.0f} m"
-            if not pd.isna(row.get("elevation_gain"))
-            else "—"
-        }<br><br>
-        {"<br>".join(insights)}
-        """
-
-        color = route_color(row)
-
-        # ──────────────────────────────────────────────────────────────
-        # Rota completa
-        # ──────────────────────────────────────────────────────────────
-        if coords:
-
-            folium.PolyLine(
-                coords,
-                color=color,
-                weight=4,
-                opacity=0.85,
-                popup=folium.Popup(
-                    popup_html,
-                    max_width=320
-                ),
-                tooltip=row["name"]
-            ).add_to(m)
-
-        # ──────────────────────────────────────────────────────────────
-        # Fallback marker
-        # ──────────────────────────────────────────────────────────────
-        else:
-
-            folium.CircleMarker(
-                location=[
-                    row["latitude"],
-                    row["longitude"]
-                ],
-                radius=6,
-                color=color,
-                fill=True,
-                fill_opacity=0.9,
-                popup=folium.Popup(
-                    popup_html,
-                    max_width=320
-                ),
-                tooltip=row["name"]
-            ).add_to(m)
-
-    # ──────────────────────────────────────────────────────────────────────
-    # Render mapa
-    # ──────────────────────────────────────────────────────────────────────
-    st_folium(
-        m,
-        width="100%",
-        height=550
-    )
-
-    # ──────────────────────────────────────────────────────────────────────
     # Comparação automática
-    # ──────────────────────────────────────────────────────────────────────
     if len(df_map) >= 2:
-
+        st.markdown("---")
         st.markdown("### 🔍 Comparação")
 
-        valid_pace = df_map[
-            df_map["pace_sec_km"].notna()
-        ]
+        valid_pace = df_map[df_map["pace_sec_km"].notna() & (df_map["pace_sec_km"] > 0)]
 
         if not valid_pace.empty:
-
-            melhor = valid_pace.loc[
-                valid_pace["pace_sec_km"].idxmin()
-            ]
-
-            pior = valid_pace.loc[
-                valid_pace["pace_sec_km"].idxmax()
-            ]
-
+            melhor = valid_pace.loc[valid_pace["pace_sec_km"].idxmin()]
+            pior   = valid_pace.loc[valid_pace["pace_sec_km"].idxmax()]
             c1, c2 = st.columns(2)
-
             with c1:
-                st.success(
-                    f"🏆 Melhor pace\n\n"
-                    f"{fmt_pace(melhor['pace_sec_km'])}/km\n\n"
-                    f"{melhor['name']}"
-                )
-
+                st.success(f"🏆 Melhor pace\n\n**{fmt_pace(melhor['pace_sec_km'])}/km**\n\n{melhor['name']}")
             with c2:
-                st.warning(
-                    f"📉 Pace mais lento\n\n"
-                    f"{fmt_pace(pior['pace_sec_km'])}/km\n\n"
-                    f"{pior['name']}"
-                )
+                st.warning(f"📉 Pace mais lento\n\n**{fmt_pace(pior['pace_sec_km'])}/km**\n\n{pior['name']}")
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  11 · HISTÓRICO
@@ -2116,7 +2199,8 @@ with tab_hist:
                                             y=laps_fc["max_heartrate"], mode="lines",
                                             line=dict(color=RED, width=1, dash="dot"),
                                             name="FC Máx", opacity=0.5)
-                        fig.update_layout(title="❤️ FC por Lap", xaxis_title="Lap", yaxis_title="bpm")
+                        fig.update_layout(title="❤️ FC por Lap",
+                                          xaxis_title="Lap", yaxis_title="bpm")
                         st.plotly_chart(fig, width="stretch")
                     else:
                         st.info("FC não disponível para esta atividade.")
