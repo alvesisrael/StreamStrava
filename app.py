@@ -634,7 +634,10 @@ def filt_laps(d):
         return d
 
     d = d.copy()
-    d["start_date"] = pd.to_datetime(d["start_date"], errors="coerce")
+
+    # 🔥 NORMALIZA TOTAL (resolve timezone + string + tudo)
+    d["start_date"] = pd.to_datetime(d["start_date"], errors="coerce", utc=True)
+    d["start_date"] = d["start_date"].dt.tz_localize(None)
 
     s = pd.to_datetime(s_dt)
     e = pd.to_datetime(e_dt) + pd.Timedelta(days=1)
