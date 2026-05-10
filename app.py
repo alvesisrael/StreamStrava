@@ -267,7 +267,7 @@ def elev_gain_to_hex(elev_per_km):
 
 # ── INTENSIDADE ──────────────────────────────────────────────────────
 def cat_intensity(val):
-    if pd.isna(val):
+    if val is None or (isinstance(val, float) and pd.isna(val)):
         return "Moderado"
     val = str(val).strip().title()
     return val if val in INTENSITY_COLORS else "Moderado"
