@@ -1837,13 +1837,116 @@ with tab_mapa:
 
     # ── 🔍 Comparar Trecho ─────────────────────────────────────────────────────
     st.markdown("---")
+
+    # ── helpers GPS (definidos uma vez, usados no bloco abaixo) ──────────────
+    @st.cache_data(show_spinner=False)
+    def _polyline_with_cum(poly_str: str):
+        """Decodifica polyline e calcula distância cumulativa em metros."""
+        pts = decode_polyline(poly_str)
+        if not pts:
+            return [], []
+        cum = [0.0]
+        for i in range(1, len(pts)):
+            cum.append(cum[-1] + _haversine_km(pts[i-1], pts[i]) * 1000)
+        return pts, cum
+
+    def _extract_seg_pts(pts, cum, km_start, km_end):
+        """Retorna pontos GPS entre km_start e km_end (em metros)."""
+        m_start, m_end = km_start * 1000, km_end * 1000
+        return [p for p, c in zip(pts, cum) if m_start <= c <= m_end]
+
+    def _closest_dist_m(point, pts):
+        """Distância mínima (metros) de um ponto para qualquer ponto da polyline."""
+        if not pts:
+            return float("inf")
+        return min(_haversine_km(point, p) * 1000 for p in pts)
+
+    def _match_segment_on_run(seg_pts, cand_pts, cand_cum,
+                               corridor_m: float = 80, coverage: float = 0.65,
+                               ref_seg_km: float = 0.0):
+        """
+        Verifica se cand_pts passa pelo corredor geográfico de seg_pts.
+        Retorna (km_start_cand, km_end_cand) no run candidato, ou None se não bate.
+
+        corridor_m  : distância máxima em metros para considerar "mesmo lugar"
+        coverage    : fração mínima dos pontos do segmento que precisa ter match
+
+        Lógica de sequência: os índices do candidato devem ser monotonicamente
+        crescentes (a corrida passa pelo trecho em ordem, sem loop/ida-e-volta).
+        O span do candidato não pode ser > 2.5× o comprimento do trecho referência.
+        """
+        if not seg_pts or not cand_pts:
+            return None
+
+        # Para cada ponto do segmento de referência, acha o ponto mais próximo
+        # no candidato — mas só avança no candidato (evita loops/retornos)
+        matched_cand_idx = []
+        min_allowed_j = 0   # só aceita índices crescentes
+        for sp in seg_pts:
+            best_d = float("inf")
+            best_j = -1
+            for j in range(min_allowed_j, len(cand_pts)):
+                d = _haversine_km(sp, cand_pts[j]) * 1000
+                if d < best_d:
+                    best_d = d
+                    best_j = j
+            if best_d <= corridor_m and best_j >= 0:
+                matched_cand_idx.append(best_j)
+                min_allowed_j = best_j  # próximos pontos só depois deste
+
+        if len(matched_cand_idx) / max(len(seg_pts), 1) < coverage:
+            return None   # candidato não cobre o trecho suficientemente
+
+        min_j = matched_cand_idx[0]
+        max_j = matched_cand_idx[-1]
+        km_s  = cand_cum[min_j] / 1000
+        km_e  = cand_cum[max_j] / 1000
+
+        # Rejeita se o span do candidato for > 2.5× o tamanho do trecho referência
+        ref_span_km = (cand_cum[-1] / 1000) if not cand_cum else 1.0
+        # Comprimento real do trecho (parâmetro) ou fallback para reta entre pontos
+        seg_ref_km  = ref_seg_km if ref_seg_km > 0 else \
+                      (_haversine_km(seg_pts[0], seg_pts[-1]) if len(seg_pts) >= 2 else 1.0)
+        cand_span   = km_e - km_s
+        if cand_span > max(seg_ref_km * 2.5, 0.5):
+            return None   # loop/ida-e-volta detectado — descarta
+
+        return km_s, km_e  # km no candidato
+
+    def _pace_in_range(laps_df, km_start_cand, km_end_cand):
+        """
+        Extrai pace médio dos laps do candidato que cobrem [km_start_cand, km_end_cand].
+        Cada lap com split=N cobre aprox. de (N-1)km a N km.
+        Aceita sobreposição parcial.
+        """
+        # Splits que se sobrepõem com o intervalo
+        lap_ini = max(1, int(km_start_cand))        # 1º split que pode cobrir km_start_cand
+        lap_fim = int(km_end_cand) + 1              # último split que pode cobrir km_end_cand
+        sel = laps_df[
+            (laps_df["split"] >= lap_ini) &
+            (laps_df["split"] <= lap_fim) &
+            laps_df["pace_sec_km"].notna() &
+            (laps_df["pace_sec_km"] > 0) &
+            (laps_df["pace_sec_km"] < 600)   # < 10 min/km (caminhada trail ok)
+        ]
+        if sel.empty:
+            return None, None
+        # Média ponderada por distância do lap
+        weights = sel["distance_km"] if "distance_km" in sel.columns else None
+        if weights is not None and weights.sum() > 0:
+            pace_avg = float((sel["pace_sec_km"] * sel["distance_km"]).sum() / sel["distance_km"].sum())
+        else:
+            pace_avg = float(sel["pace_sec_km"].mean())
+        hr_avg = float(sel["average_heartrate"].mean())                  if "average_heartrate" in sel.columns and sel["average_heartrate"].notna().any()                  else float("nan")
+        return pace_avg, hr_avg
+
     with st.expander("🔍 Comparar trecho com outras corridas", expanded=False):
         st.caption(
-            "Escolha uma corrida de referência e arraste o slider para selecionar "
-            "de qual km até qual km você quer comparar. O app busca automaticamente "
-            "outras corridas que saíram do mesmo ponto e cobriram esse trecho.")
+            "Escolha uma corrida de referência e arraste o slider para definir o trecho. "
+            "A busca usa **coordenadas GPS reais** — só aparecem corridas que "
+            "efetivamente passaram pelo mesmo lugar, independente do número do km.")
 
-        # Corrida de referência
+        # ── Corrida de referência ─────────────────────────────────────────────
         if len(df_map) > 1:
             _cmp_ref_opts = {
                 f"{r['start_date'].strftime('%d/%m/%Y')} — {str(r['name'])[:30]} ({r['distance_km']:.1f} km)": int(r["id"])
@@ -1855,190 +1958,230 @@ with tab_mapa:
         else:
             _cmp_ref_id = int(df_map["id"].iloc[0])
 
-        # Laps da corrida de referência
-        _cmp_ref_laps = laps_raw[
-            (laps_raw["activity_id"] == _cmp_ref_id) &
-            laps_raw["split"].notna() &
-            laps_raw["pace_sec_km"].notna() &
-            (laps_raw["pace_sec_km"] > 0) &
-            (laps_raw["pace_sec_km"] < 500)
-        ].copy()
-
+        # Polyline da referência
         _cmp_ref_info = df_raw[df_raw["id"] == _cmp_ref_id]
-        if _cmp_ref_info.empty or _cmp_ref_laps.empty or int(_cmp_ref_laps["split"].max()) < 2:
-            st.info("Esta corrida não tem splits por km suficientes para comparar trechos.")
-        else:
-            _cmp_ref_info = _cmp_ref_info.iloc[0]
-            _max_split    = int(_cmp_ref_laps["split"].max())
+        if _cmp_ref_info.empty:
+            st.info("Corrida de referência não encontrada.")
+            st.stop()
+        _cmp_ref_info = _cmp_ref_info.iloc[0]
 
-            # Slider de trecho
+        _ref_poly_str = str(_cmp_ref_info.get(poly_col, "") or "") if poly_col else ""
+        _ref_pts, _ref_cum = _polyline_with_cum(_ref_poly_str) if _ref_poly_str else ([], [])
+
+        if len(_ref_pts) < 10:
+            st.info("Esta corrida não tem dados GPS (polyline) suficientes para comparar trechos.")
+        else:
+            _ref_total_km = _ref_cum[-1] / 1000
+            _max_km = max(1, int(_ref_total_km))
+
+            # ── Slider: trecho em km ──────────────────────────────────────────
             _trecho = st.slider(
                 "Trecho a comparar (km):",
-                min_value=1, max_value=_max_split,
-                value=(1, min(5, _max_split)),
-                key="cmp_trecho_slider")
+                min_value=0.0, max_value=float(_max_km),
+                value=(0.0, min(3.0, float(_max_km))),
+                step=0.5, key="cmp_trecho_slider")
             _km_ini, _km_fim = _trecho
 
-            # Buscar corridas similares: mesmo ponto de saída
-            _cmp_ref_lat = round(float(_cmp_ref_info.get("latitude") or 0), 2)
-            _cmp_ref_lng = round(float(_cmp_ref_info.get("longitude") or 0), 2)
-
-            _hist_runs = df_raw[df_raw["sport_type"].isin(["Run","TrailRun"])].copy()
-            _hist_runs["lat_r"] = _hist_runs["latitude"].round(2)
-            _hist_runs["lng_r"] = _hist_runs["longitude"].round(2)
-            _similar_ids = _hist_runs[
-                (_hist_runs["lat_r"] == _cmp_ref_lat) &
-                (_hist_runs["lng_r"] == _cmp_ref_lng) &
-                (_hist_runs["id"]    != _cmp_ref_id)
-            ]["id"].tolist()
-
-            # Laps das corridas similares no trecho selecionado
-            _trecho_laps = laps_raw[
-                laps_raw["activity_id"].isin(_similar_ids) &
-                (laps_raw["split"] >= _km_ini) &
-                (laps_raw["split"] <= _km_fim) &
-                laps_raw["pace_sec_km"].notna() &
-                (laps_raw["pace_sec_km"] > 0) &
-                (laps_raw["pace_sec_km"] < 500)
-            ].copy()
-
-            if _trecho_laps.empty:
-                st.info(
-                    f"Nenhuma outra corrida do mesmo ponto de saída cobre o trecho "
-                    f"km {_km_ini}–{_km_fim}. Tente ajustar o slider.")
+            if _km_fim <= _km_ini:
+                st.warning("Ajuste o slider para selecionar um trecho com pelo menos 0.5 km.")
             else:
-                # Agrega: pace médio no trecho por atividade
-                _expected = _km_fim - _km_ini + 1
-                _cmp_agg = (
-                    _trecho_laps.groupby("activity_id")
-                    .agg(pace_avg   = ("pace_sec_km",      "mean"),
-                         hr_avg     = ("average_heartrate", "mean"),
-                         splits_ok  = ("split",             "count"))
-                    .reset_index()
-                )
-                # Só inclui se cobriu ≥80% dos km do trecho
-                _cmp_agg = _cmp_agg[_cmp_agg["splits_ok"] >= _expected * 0.8]
+                # Pontos GPS do trecho de referência
+                _seg_pts = _extract_seg_pts(_ref_pts, _ref_cum, _km_ini, _km_fim)
 
-                # Junta com info das atividades
-                _cmp_acts = df_raw[df_raw["id"].isin(_cmp_agg["activity_id"])][
-                    ["id","name","start_date","distance_km"]].copy()
-                _cmp_agg  = _cmp_agg.merge(_cmp_acts, left_on="activity_id", right_on="id")
-                _cmp_agg["start_date"] = pd.to_datetime(_cmp_agg["start_date"], dayfirst=True, errors="coerce")
-                _cmp_agg["dt_str"]    = _cmp_agg["start_date"].dt.strftime("%d/%m/%Y")
-                _cmp_agg["label"]     = _cmp_agg["dt_str"] + " — " + _cmp_agg["name"].str[:24]
-                _cmp_agg["is_ref"]    = False
-
-                # Adiciona corrida de referência
-                _ref_seg = _cmp_ref_laps[
-                    (_cmp_ref_laps["split"] >= _km_ini) &
-                    (_cmp_ref_laps["split"] <= _km_fim)
-                ]
-                if not _ref_seg.empty:
-                    _ref_pace_avg = float(_ref_seg["pace_sec_km"].mean())
-                    _ref_hr_avg   = float(_ref_seg["average_heartrate"].mean())                                     if "average_heartrate" in _ref_seg.columns and                                        _ref_seg["average_heartrate"].notna().any() else float("nan")
-                    _ref_row = pd.DataFrame([{
-                        "activity_id": _cmp_ref_id,
-                        "pace_avg":    _ref_pace_avg,
-                        "hr_avg":      _ref_hr_avg,
-                        "splits_ok":   len(_ref_seg),
-                        "id":          _cmp_ref_id,
-                        "name":        _cmp_ref_info["name"],
-                        "start_date":  pd.to_datetime(_cmp_ref_info["start_date"], dayfirst=True, errors="coerce"),
-                        "distance_km": _cmp_ref_info["distance_km"],
-                        "dt_str":      pd.to_datetime(_cmp_ref_info["start_date"], dayfirst=True, errors="coerce").strftime("%d/%m/%Y"),
-                        "label":       pd.to_datetime(_cmp_ref_info["start_date"], dayfirst=True, errors="coerce").strftime("%d/%m/%Y")
-                                       + " — " + str(_cmp_ref_info["name"])[:24] + " ⭐",
-                        "is_ref":      True,
-                    }])
-                    _cmp_all = pd.concat([_cmp_agg, _ref_row], ignore_index=True)
+                if len(_seg_pts) < 3:
+                    st.info("Trecho muito curto ou sem pontos GPS suficientes. Aumente o intervalo.")
                 else:
-                    _cmp_all = _cmp_agg.copy()
+                    # Amostrar pontos do segmento (máx 30) para acelerar busca
+                    _step = max(1, len(_seg_pts) // 30)
+                    _seg_sample = _seg_pts[::_step]
 
-                _cmp_all = _cmp_all.sort_values("pace_avg").reset_index(drop=True)
-                _cmp_all["pace_fmt"] = fmt_pace_vec(_cmp_all["pace_avg"])
-                _cmp_all["pace_min"] = _cmp_all["pace_avg"] / 60
+                    st.caption(
+                        f"📍 Trecho de referência: km {_km_ini:.1f}–{_km_fim:.1f} "
+                        f"({(_km_fim-_km_ini)*1000:.0f} m) · {len(_seg_sample)} pontos GPS de amostragem. "
+                        "Buscando corridas que passam pelo mesmo corredor geográfico...")
 
-                st.caption(
-                    f"**{len(_cmp_all)} corridas** encontradas saindo do mesmo ponto "
-                    f"e cobrindo o trecho km {_km_ini}–{_km_fim}. "
-                    "⭐ = corrida de referência selecionada.")
+                    # ── Busca GPS: todas as corridas com polyline ─────────────
+                    _all_with_poly = df_raw[
+                        df_raw["sport_type"].isin(["Run","TrailRun"]) &
+                        df_raw[poly_col].notna() &
+                        (df_raw[poly_col].astype(str).str.len() > 10) &
+                        (df_raw["id"] != _cmp_ref_id)
+                    ].copy() if poly_col else pd.DataFrame()
 
-                # Cores: ref=amarelo, 1º=verde, último=vermelho, resto=azul
-                _n_cmp = len(_cmp_all)
-                _bar_colors = []
-                for _ci, _crow in _cmp_all.iterrows():
-                    if _crow["is_ref"]:
-                        _bar_colors.append("#F1C40F")
-                    elif _ci == 0:
-                        _bar_colors.append("#2ECC71")
-                    elif _ci == _n_cmp - 1:
-                        _bar_colors.append("#E74C3C")
+                    if _all_with_poly.empty:
+                        st.info("Nenhuma outra corrida com dados GPS encontrada.")
                     else:
-                        _bar_colors.append("#3498DB")
+                        _results = []
+                        for _, _cand in _all_with_poly.iterrows():
+                            _cand_poly = str(_cand[poly_col])
+                            _cand_pts, _cand_cum = _polyline_with_cum(_cand_poly)
+                            if len(_cand_pts) < 5:
+                                continue
 
-                # ── Bar chart: pace médio no trecho ──────────────────────────
-                fig_cmp = go.Figure()
-                fig_cmp.add_bar(
-                    x=_cmp_all["label"],
-                    y=_cmp_all["pace_min"],
-                    marker_color=_bar_colors,
-                    text=_cmp_all["pace_fmt"],
-                    textposition="outside",
-                    customdata=_cmp_all[["dt_str","name","distance_km"]].values,
-                    hovertemplate=(
-                        "<b>%{customdata[0]}</b> — %{customdata[1]}<br>"
-                        "Dist total: %{customdata[2]:.1f} km<br>"
-                        f"Pace km {_km_ini}–{_km_fim}: <b>%{{text}}/km</b><extra></extra>"))
-                set_pace_yaxis(fig_cmp, _cmp_all["pace_avg"])
-                fig_cmp.update_layout(
-                    title=dict(
-                        text=f"Pace médio no trecho km {_km_ini}–{_km_fim} · {_n_cmp} corridas",
-                        font=dict(size=13), x=0),
-                    xaxis=dict(tickangle=-35, showgrid=False),
-                    yaxis=dict(gridcolor="rgba(128,128,128,0.12)"),
-                    plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                    showlegend=False,
-                    margin=dict(t=50, b=10, l=0, r=0))
-                st.plotly_chart(fig_cmp, use_container_width=True)
-                st.caption(
-                    "🟡 Corrida de referência · 🟢 Mais rápida no trecho · "
-                    "🔴 Mais lenta · 🔵 Demais corridas")
+                            _match = _match_segment_on_run(
+                                _seg_sample, _cand_pts, _cand_cum,
+                                corridor_m=80, coverage=0.65,
+                                ref_seg_km=float(_km_fim - _km_ini))
+                            if _match is None:
+                                continue
 
-                # ── Pace km a km dentro do trecho (linha por corrida) ────────
-                if _km_fim - _km_ini >= 2:
-                    _det_ids  = _cmp_all["activity_id"].tolist()
-                    _det_laps = laps_raw[
-                        laps_raw["activity_id"].isin(_det_ids) &
-                        (laps_raw["split"] >= _km_ini) &
-                        (laps_raw["split"] <= _km_fim) &
-                        laps_raw["pace_sec_km"].notna() &
-                        (laps_raw["pace_sec_km"] > 0) &
-                        (laps_raw["pace_sec_km"] < 500)
-                    ].copy()
-                    _det_laps = _det_laps.merge(
-                        _cmp_all[["activity_id","label"]], on="activity_id", how="left")
-                    _det_laps["pace_min"] = _det_laps["pace_sec_km"] / 60
-                    _det_laps["pace_fmt"] = fmt_pace_vec(_det_laps["pace_sec_km"])
+                            _km_s_cand, _km_e_cand = _match
+                            # Laps do candidato
+                            _cand_laps = laps_raw[
+                                (laps_raw["activity_id"] == int(_cand["id"])) &
+                                laps_raw["split"].notna()
+                            ]
+                            _pace_cand, _hr_cand = _pace_in_range(
+                                _cand_laps, _km_s_cand, _km_e_cand)
+                            if _pace_cand is None:
+                                continue
+                            _results.append({
+                                "activity_id": int(_cand["id"]),
+                                "name":        str(_cand["name"]),
+                                "start_date":  pd.to_datetime(_cand["start_date"], dayfirst=True, errors="coerce"),
+                                "distance_km": float(_cand["distance_km"]),
+                                "pace_avg":    _pace_cand,
+                                "hr_avg":      _hr_cand,
+                                "km_s":        _km_s_cand,
+                                "km_e":        _km_e_cand,
+                                "is_ref":      False,
+                            })
 
-                    with st.expander(f"📈 Pace km a km dentro do trecho {_km_ini}–{_km_fim}"):
-                        fig_det = px.line(
-                            _det_laps, x="split", y="pace_min", color="label",
-                            markers=True,
-                            labels={"split":"km","pace_min":"Pace (min/km)","label":"Corrida"},
-                            title=f"Evolução de pace dentro do trecho km {_km_ini}–{_km_fim}")
-                        fig_det.update_traces(
-                            customdata=_det_laps[["pace_fmt"]].values,
-                            hovertemplate="km %{x}<br>Pace: <b>%{customdata[0]}/km</b><extra></extra>")
-                        set_pace_yaxis(fig_det, _det_laps["pace_sec_km"])
-                        fig_det.update_layout(
-                            plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                            margin=dict(t=45, b=10, l=0, r=0),
-                            legend=dict(orientation="h", y=-0.35, x=0))
-                        st.plotly_chart(fig_det, use_container_width=True)
-                        st.caption(
-                            "Cada linha = uma corrida. "
-                            "Veja se você desacelera sempre no mesmo km — "
-                            "pode indicar subida, vento ou fadiga recorrente.")
+                        # Adiciona corrida de referência
+                        _ref_laps = laps_raw[
+                            (laps_raw["activity_id"] == _cmp_ref_id) &
+                            laps_raw["split"].notna()
+                        ]
+                        _ref_pace, _ref_hr = _pace_in_range(_ref_laps, _km_ini, _km_fim)
+                        if _ref_pace:
+                            _results.append({
+                                "activity_id": _cmp_ref_id,
+                                "name":        str(_cmp_ref_info["name"]) + " ⭐",
+                                "start_date":  pd.to_datetime(_cmp_ref_info["start_date"], dayfirst=True, errors="coerce"),
+                                "distance_km": float(_cmp_ref_info["distance_km"]),
+                                "pace_avg":    _ref_pace,
+                                "hr_avg":      _ref_hr,
+                                "km_s":        _km_ini,
+                                "km_e":        _km_fim,
+                                "is_ref":      True,
+                            })
+
+                        if not _results:
+                            st.info(
+                                f"Nenhuma outra corrida passou pelo mesmo trecho geográfico "
+                                f"(corredor de 80 m, cobertura ≥ 65%). "
+                                "Tente ampliar o trecho ou verifique se outras corridas cobrem essa área.")
+                        else:
+                            _cmp_df = pd.DataFrame(_results).sort_values("pace_avg").reset_index(drop=True)
+                            _cmp_df["dt_str"]    = _cmp_df["start_date"].dt.strftime("%d/%m/%Y")
+                            _cmp_df["label"]     = _cmp_df["dt_str"] + " — " + _cmp_df["name"].str[:26]
+                            _cmp_df["pace_fmt"]  = fmt_pace_vec(_cmp_df["pace_avg"])
+                            _cmp_df["pace_min"]  = _cmp_df["pace_avg"] / 60
+
+                            _n_res = len(_cmp_df)
+                            st.caption(
+                                f"✅ **{_n_res} corridas** passam pelo mesmo trecho geográfico. "
+                                "⭐ = corrida de referência.")
+
+                            # ── Bar chart ──────────────────────────────────────
+                            _bar_colors = []
+                            for _ci, _crow in _cmp_df.iterrows():
+                                if _crow["is_ref"]:
+                                    _bar_colors.append("#F1C40F")
+                                elif _ci == 0:
+                                    _bar_colors.append("#2ECC71")
+                                elif _ci == _n_res - 1:
+                                    _bar_colors.append("#E74C3C")
+                                else:
+                                    _bar_colors.append("#3498DB")
+
+                            fig_cmp = go.Figure()
+                            fig_cmp.add_bar(
+                                x=_cmp_df["label"],
+                                y=_cmp_df["pace_min"],
+                                marker_color=_bar_colors,
+                                text=_cmp_df["pace_fmt"],
+                                textposition="outside",
+                                customdata=_cmp_df[["dt_str","name","distance_km","hr_avg"]].values,
+                                hovertemplate=(
+                                    "<b>%{customdata[0]}</b> — %{customdata[1]}<br>"
+                                    "Dist total: %{customdata[2]:.1f} km<br>"
+                                    "FC média no trecho: %{customdata[3]:.0f} bpm<br>"
+                                    f"Pace trecho: <b>%{{text}}/km</b><extra></extra>"))
+                            set_pace_yaxis(fig_cmp, _cmp_df["pace_avg"])
+                            fig_cmp.update_layout(
+                                title=dict(
+                                    text=f"Pace no trecho km {_km_ini:.1f}–{_km_fim:.1f} · match por GPS",
+                                    font=dict(size=13), x=0),
+                                xaxis=dict(tickangle=-35, showgrid=False),
+                                yaxis=dict(gridcolor="rgba(128,128,128,0.12)"),
+                                plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                                showlegend=False,
+                                margin=dict(t=50, b=10, l=0, r=0))
+                            st.plotly_chart(fig_cmp, use_container_width=True)
+                            st.caption(
+                                "🟡 Corrida de referência · 🟢 Mais rápida no trecho · "
+                                "🔴 Mais lenta · 🔵 Demais  |  "
+                                "Match: corridas que passaram no mesmo corredor geográfico (±80 m)")
+
+                            # ── Evolução ao longo do tempo ──────────────────────
+                            _evo = _cmp_df.sort_values("start_date")
+                            if len(_evo) >= 3:
+                                with st.expander("📈 Evolução deste trecho ao longo do tempo"):
+                                    fig_evo = go.Figure()
+                                    _evo_colors = [
+                                        "#F1C40F" if r["is_ref"] else "#3498DB"
+                                        for _, r in _evo.iterrows()
+                                    ]
+                                    fig_evo.add_scatter(
+                                        x=_evo["dt_str"], y=_evo["pace_min"],
+                                        mode="lines+markers",
+                                        line=dict(color="#3498DB", width=2),
+                                        marker=dict(size=10, color=_evo_colors,
+                                                    line=dict(width=1.5, color="white")),
+                                        text=_evo["pace_fmt"],
+                                        hovertemplate=(
+                                            "<b>%{x}</b><br>"
+                                            "Pace: <b>%{text}/km</b><extra></extra>"))
+                                    # Trend
+                                    _xt = np.arange(len(_evo), dtype=float)
+                                    _yt = _evo["pace_avg"].to_numpy(dtype=float)
+                                    _ct = np.polyfit(_xt, _yt, 1)
+                                    fig_evo.add_scatter(
+                                        x=_evo["dt_str"],
+                                        y=np.polyval(_ct, _xt) / 60,
+                                        mode="lines", name="Tendência",
+                                        line=dict(
+                                            color="#2ECC71" if _ct[0] < 0 else "#E74C3C",
+                                            width=2, dash="dash"),
+                                        hoverinfo="skip")
+                                    set_pace_yaxis(fig_evo, _evo["pace_avg"])
+                                    fig_evo.update_layout(
+                                        title=dict(
+                                            text=f"Evolução histórica neste trecho",
+                                            font=dict(size=13), x=0),
+                                        xaxis=dict(tickangle=-45, showgrid=False),
+                                        yaxis=dict(gridcolor="rgba(128,128,128,0.12)"),
+                                        plot_bgcolor="rgba(0,0,0,0)",
+                                        paper_bgcolor="rgba(0,0,0,0)",
+                                        showlegend=True,
+                                        legend=dict(orientation="h", y=-0.25),
+                                        margin=dict(t=45, b=10, l=0, r=0))
+                                    st.plotly_chart(fig_evo, use_container_width=True)
+
+                            # ── Tabela detalhada ─────────────────────────────────
+                            with st.expander("📋 Detalhes de cada corrida no trecho"):
+                                _tbl_cmp = _cmp_df[
+                                    ["dt_str","name","distance_km","pace_fmt","hr_avg"]
+                                ].copy()
+                                _tbl_cmp["FC Média"] = _tbl_cmp["hr_avg"].apply(
+                                    lambda x: f"{x:.0f} bpm" if pd.notna(x) and x > 0 else "—")
+                                st.dataframe(
+                                    _tbl_cmp[["dt_str","name","distance_km","pace_fmt","FC Média"]]
+                                    .rename(columns={
+                                        "dt_str":"Data", "name":"Atividade",
+                                        "distance_km":"Dist total (km)", "pace_fmt":"Pace no trecho"}),
+                                    hide_index=True, use_container_width=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  11 · HISTÓRICO
@@ -2208,14 +2351,14 @@ with tab_hist:
                 df_laps_tab["moving_time_sec"]      = df_laps_tab["moving_time_sec"].apply(
                     lambda x: f"{int(x//60)}:{int(x%60):02d}" if not pd.isna(x) else "—")
                 df_laps_tab["distance_m"]           = df_laps_tab["distance_m"].apply(
-                    lambda x: f"{x:.0f}" if not pd.isna(x) else "—")
+                    lambda x: f"{x:.0f} m" if not pd.isna(x) else "—")
+                df_laps_tab["average_cadence"]      = df_laps_tab["average_cadence"].apply(
+                    lambda x: f"{int(x*2)} spm" if not pd.isna(x) else "—")
                 df_laps_tab["average_heartrate"]    = df_laps_tab["average_heartrate"].apply(
                     lambda x: f"{x:.0f}" if not pd.isna(x) else "—")
                 df_laps_tab["max_heartrate"]        = df_laps_tab["max_heartrate"].apply(
                     lambda x: f"{x:.0f}" if not pd.isna(x) else "—")
                 df_laps_tab["total_elevation_gain"] = df_laps_tab["total_elevation_gain"].apply(
-                    lambda x: f"{x:.1f}" if not pd.isna(x) else "—")
-                df_laps_tab["average_cadence"]      = df_laps_tab["average_cadence"].apply(
-                    lambda x: f"{x*2:.0f} spm" if not pd.isna(x) else "—")
-                df_laps_tab = df_laps_tab.rename(columns=cols_lap)
-                st.dataframe(df_laps_tab, hide_index=True, width="stretch")
+                    lambda x: f"{x:.0f} m" if not pd.isna(x) else "—")
+                st.dataframe(df_laps_tab.rename(columns=cols_lap),
+                             hide_index=True, width="stretch")
