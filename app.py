@@ -1344,6 +1344,275 @@ with tab_desemp:
                                .rename(columns={"name":"Atividade"}),
                              hide_index=True, use_container_width=True)
 
+    # ── 📍 Evolução por Rota ──────────────────────────────────────────────────
+    with st.expander("📍 Evolução por Rota — Compare sua progressão no mesmo percurso", expanded=False):
+        _all_runs_rota = df_raw[df_raw["sport_type"].isin(["Run","TrailRun"])].copy()
+        _all_runs_rota = _all_runs_rota[
+            _all_runs_rota["latitude"].notna() &
+            _all_runs_rota["longitude"].notna() &
+            _all_runs_rota["pace_sec_km"].notna() &
+            (_all_runs_rota["pace_sec_km"] > 0)
+        ].copy()
+
+        if len(_all_runs_rota) < 6:
+            st.info("Dados insuficientes para análise de rotas.")
+        else:
+            _all_runs_rota["lat_r"]  = _all_runs_rota["latitude"].round(2)
+            _all_runs_rota["lng_r"]  = _all_runs_rota["longitude"].round(2)
+            # bucket de 1.5 km: corridas entre 9.76–11.25 km ficam no bucket 10.5
+            _all_runs_rota["dist_b"] = (_all_runs_rota["distance_km"] / 1.5).round(0) * 1.5
+
+            # ── Agrupar por (lat_r, lng_r, dist_b) ─────────────────────────
+            _rota_clusters: dict = {}
+            for _, _rr in _all_runs_rota.iterrows():
+                _k = (_rr["lat_r"], _rr["lng_r"], _rr["dist_b"])
+                _rota_clusters.setdefault(_k, []).append(_rr["id"])
+            _rota_clusters = {k: v for k, v in _rota_clusters.items() if len(v) >= 3}
+
+            if not _rota_clusters:
+                st.info("Nenhuma rota repetida encontrada. Mínimo: 3 corridas no mesmo ponto de saída e distância similar.")
+            else:
+                # ── Montar opções do selectbox ──────────────────────────────
+                _rota_opts: dict = {}
+                for _k, _ids in sorted(_rota_clusters.items(), key=lambda x: -len(x[1])):
+                    _sub = _all_runs_rota[_all_runs_rota["id"].isin(_ids)].sort_values("start_date")
+                    _d1  = _sub["start_date"].min().strftime("%m/%y")
+                    _d2  = _sub["start_date"].max().strftime("%m/%y")
+                    # Tenta buscar bairro no cache do mapa (se já foi construído)
+                    _loc_hint = ""
+                    try:
+                        _loc_hint = _geo_cache.get((_k[0], _k[1]), "")
+                        if _loc_hint:
+                            _loc_hint = f" · 📍 {_loc_hint.split(',')[0]}"
+                    except Exception:
+                        pass
+                    _label = f"~{_k[2]:.1f} km · {len(_ids)} corridas{_loc_hint} · {_d1}→{_d2}"
+                    _rota_opts[_label] = _ids
+
+                st.caption(
+                    f"**{len(_rota_clusters)} rotas recorrentes** detectadas "
+                    f"(mesmo ponto de saída ± ~200 m e distância similar ± ~750 m). "
+                    "Selecione uma rota para ver sua evolução ao longo do tempo.")
+
+                _sel_rota = st.selectbox(
+                    "Rota:", list(_rota_opts.keys()), key="sel_rota_evo",
+                    label_visibility="collapsed")
+
+                if _sel_rota:
+                    _rota_ids = _rota_opts[_sel_rota]
+                    _rota_df  = (
+                        _all_runs_rota[_all_runs_rota["id"].isin(_rota_ids)]
+                        .sort_values("start_date").copy()
+                    )
+                    _rota_df["dt_label"] = _rota_df["start_date"].dt.strftime("%d/%m/%y")
+                    _n_rota = len(_rota_df)
+
+                    # ── Cards de resumo ─────────────────────────────────────
+                    _pb_idx    = _rota_df["pace_sec_km"].idxmin()
+                    _pb_pace   = _rota_df.loc[_pb_idx, "pace_sec_km"]
+                    _pb_date   = _rota_df.loc[_pb_idx, "start_date"].strftime("%d/%m/%Y")
+                    _last_pace = float(_rota_df["pace_sec_km"].iloc[-1])
+                    _first_pace= float(_rota_df["pace_sec_km"].iloc[0])
+                    _delta_sec = _last_pace - _first_pace  # negativo = mais rápido = melhor
+
+                    # Tendência linear via numpy
+                    _xn = np.arange(_n_rota, dtype=float)
+                    _yn = _rota_df["pace_sec_km"].to_numpy(dtype=float)
+                    _valid_mask = ~np.isnan(_yn)
+                    _coef_pace = (np.polyfit(_xn[_valid_mask], _yn[_valid_mask], 1)
+                                  if _valid_mask.sum() >= 2 else np.array([0.0, _yn.mean()]))
+                    _trend_dir = "🟢 Melhorando" if _coef_pace[0] < -0.5 else (
+                                 "🔴 Pioras" if _coef_pace[0] > 1.5 else "🟡 Estável")
+
+                    rc1, rc2, rc3, rc4 = st.columns(4)
+                    rc1.metric("🥇 PR nesta rota", fmt_pace(_pb_pace) + "/km",
+                               _pb_date, delta_color="off")
+                    rc2.metric("⏱️ Última corrida", fmt_pace(_last_pace) + "/km",
+                               _rota_df["start_date"].iloc[-1].strftime("%d/%m/%Y"),
+                               delta_color="off")
+                    rc3.metric("📈 Evolução (1ª→última)",
+                               f"{abs(_delta_sec):.0f} s/km",
+                               ("✅ mais rápido" if _delta_sec < -5
+                                else "⚠️ mais lento" if _delta_sec > 5
+                                else "≈ igual"),
+                               delta_color=("normal" if _delta_sec < -5
+                                            else "inverse" if _delta_sec > 5
+                                            else "off"))
+                    rc4.metric("📊 Tendência geral", _trend_dir,
+                               f"{abs(_coef_pace[0]):.1f} s/corrida",
+                               delta_color="off")
+
+                    # ── Gráfico: Pace ao longo do tempo ────────────────────
+                    _rota_df["pace_min"]  = _rota_df["pace_sec_km"] / 60
+                    _rota_df["pace_fmt"]  = fmt_pace_vec(_rota_df["pace_sec_km"])
+                    _trend_y_pace         = np.polyval(_coef_pace, _xn) / 60
+
+                    # Cor dos marcadores: PR = ouro, top-3 = verde, resto = azul
+                    _sorted_idx = _rota_df["pace_sec_km"].rank(method="first")
+                    _marker_colors = [
+                        "#F1C40F" if i == _pb_idx
+                        else "#2ECC71" if _sorted_idx.loc[i] <= 3
+                        else "#3498DB"
+                        for i in _rota_df.index
+                    ]
+
+                    fig_rota = go.Figure()
+                    fig_rota.add_scatter(
+                        x=_rota_df["dt_label"], y=_rota_df["pace_min"],
+                        fill="tozeroy", fillcolor="rgba(52,152,219,0.07)",
+                        line=dict(width=0), showlegend=False, hoverinfo="skip")
+                    fig_rota.add_scatter(
+                        x=_rota_df["dt_label"], y=_rota_df["pace_min"],
+                        mode="lines+markers",
+                        name="Pace real",
+                        line=dict(color="#3498DB", width=2.5, shape="spline"),
+                        marker=dict(size=9, color=_marker_colors,
+                                    line=dict(width=1.5, color="white")),
+                        text=_rota_df["pace_fmt"],
+                        customdata=_rota_df[["name","distance_km"]].values,
+                        hovertemplate=(
+                            "<b>%{x}</b><br>"
+                            "%{customdata[0]}<br>"
+                            "Dist: %{customdata[1]:.2f} km<br>"
+                            "Pace: <b>%{text}/km</b><extra></extra>"))
+                    fig_rota.add_scatter(
+                        x=_rota_df["dt_label"], y=_trend_y_pace,
+                        mode="lines",
+                        name="Tendência",
+                        line=dict(
+                            color="#E74C3C" if _coef_pace[0] > 0.5 else "#2ECC71",
+                            width=2, dash="dash"),
+                        hoverinfo="skip")
+                    # Estrela no PR
+                    fig_rota.add_scatter(
+                        x=[_rota_df.loc[_pb_idx, "dt_label"]],
+                        y=[_rota_df.loc[_pb_idx, "pace_min"]],
+                        mode="markers+text",
+                        marker=dict(size=15, color="#F1C40F", symbol="star",
+                                    line=dict(width=2, color="white")),
+                        text=["⭐ PR"], textposition="top center",
+                        textfont=dict(size=10, color="#F1C40F"),
+                        showlegend=False, hoverinfo="skip")
+
+                    set_pace_yaxis(fig_rota, _rota_df["pace_sec_km"])
+                    fig_rota.update_layout(
+                        title=dict(
+                            text=f"Pace ao longo do tempo — {_sel_rota}",
+                            font=dict(size=13), x=0),
+                        xaxis=dict(tickangle=-45, showgrid=False),
+                        yaxis=dict(gridcolor="rgba(128,128,128,0.12)"),
+                        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                        legend=dict(orientation="h", y=-0.22, x=0),
+                        margin=dict(t=45, b=10, l=0, r=0),
+                        hovermode="closest")
+                    st.plotly_chart(fig_rota, use_container_width=True)
+
+                    # ── Gráfico: FC ao longo do tempo ───────────────────────
+                    _rota_hr = _rota_df[
+                        _rota_df["average_heartrate"].notna() &
+                        (_rota_df["average_heartrate"] > 0)
+                    ].copy()
+                    if len(_rota_hr) >= 3:
+                        _xh   = np.arange(len(_rota_hr), dtype=float)
+                        _yh   = _rota_hr["average_heartrate"].to_numpy(dtype=float)
+                        _ch   = np.polyfit(_xh, _yh, 1)
+                        _trend_hr_y = np.polyval(_ch, _xh)
+
+                        fig_hr = go.Figure()
+                        fig_hr.add_scatter(
+                            x=_rota_hr["dt_label"], y=_rota_hr["average_heartrate"],
+                            fill="tozeroy", fillcolor="rgba(231,76,60,0.07)",
+                            line=dict(width=0), showlegend=False, hoverinfo="skip")
+                        fig_hr.add_scatter(
+                            x=_rota_hr["dt_label"], y=_rota_hr["average_heartrate"],
+                            mode="lines+markers",
+                            name="FC média",
+                            line=dict(color="#E74C3C", width=2.5, shape="spline"),
+                            marker=dict(size=8, color="#E74C3C",
+                                        line=dict(width=1.5, color="white")),
+                            hovertemplate="<b>%{x}</b><br>FC: <b>%{y:.0f} bpm</b><extra></extra>")
+                        fig_hr.add_scatter(
+                            x=_rota_hr["dt_label"], y=_trend_hr_y,
+                            mode="lines",
+                            name="Tendência FC",
+                            line=dict(
+                                color="#2ECC71" if _ch[0] < 0 else "#F1C40F",
+                                width=1.5, dash="dot"),
+                            hoverinfo="skip")
+                        fig_hr.update_layout(
+                            title=dict(
+                                text="FC média ao longo do tempo (mesma rota)",
+                                font=dict(size=13), x=0),
+                            xaxis=dict(tickangle=-45, showgrid=False),
+                            yaxis=dict(title="bpm", gridcolor="rgba(128,128,128,0.12)"),
+                            plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                            legend=dict(orientation="h", y=-0.22, x=0),
+                            margin=dict(t=45, b=10, l=0, r=0))
+                        st.plotly_chart(fig_hr, use_container_width=True)
+                        st.caption(
+                            "📉 FC caindo na mesma rota = maior eficiência cardíaca. "
+                            "📈 FC subindo = fadiga acumulada ou piora de condição.")
+
+                    # ── Pace/FC scatter: eficiência cardíaca ────────────────
+                    _eff_df = _rota_df[
+                        _rota_df["average_heartrate"].notna() &
+                        (_rota_df["average_heartrate"] > 0) &
+                        _rota_df["pace_sec_km"].notna()
+                    ].copy()
+                    if len(_eff_df) >= 5:
+                        _eff_df["pace_min"]  = _eff_df["pace_sec_km"] / 60
+                        _eff_df["pace_fmt"]  = fmt_pace_vec(_eff_df["pace_sec_km"])
+                        _eff_df["ano"]       = _eff_df["start_date"].dt.year.astype(str)
+                        fig_eff = px.scatter(
+                            _eff_df, x="average_heartrate", y="pace_min",
+                            color="ano",
+                            hover_name="name",
+                            custom_data=["dt_label","pace_fmt","distance_km"],
+                            title="Pace × FC (mesma rota) — cada ponto = 1 corrida",
+                            labels={"average_heartrate":"FC média (bpm)",
+                                    "pace_min":"Pace (min/km)", "ano":"Ano"},
+                            trendline="ols",
+                            opacity=0.80)
+                        fig_eff.update_traces(
+                            hovertemplate=(
+                                "<b>%{hover_name}</b><br>"
+                                "%{customdata[0]}<br>"
+                                "FC: %{x:.0f} bpm · "
+                                "Pace: %{customdata[1]}/km<br>"
+                                "Dist: %{customdata[2]:.2f} km<extra></extra>"),
+                            selector=dict(mode="markers"))
+                        set_pace_yaxis(fig_eff, _eff_df["pace_sec_km"])
+                        fig_eff.update_layout(
+                            plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                            margin=dict(t=50, b=10, l=0, r=0))
+                        with st.expander("🫀 Eficiência cardíaca (Pace × FC na mesma rota)"):
+                            st.plotly_chart(fig_eff, use_container_width=True)
+                            st.caption(
+                                "**Pontos no canto inferior esquerdo** (pace rápido + FC baixa) = "
+                                "máxima eficiência. Compare os anos: mover para a esquerda/baixo = "
+                                "evolução real de condicionamento.")
+
+                    # ── Tabela detalhada ─────────────────────────────────────
+                    with st.expander("📋 Todas as corridas nesta rota (ordenado por pace)"):
+                        _tbl = _rota_df[
+                            ["start_date","name","distance_km","pace_sec_km",
+                             "average_heartrate","elevation_gain","suffer_score"]
+                        ].copy().sort_values("pace_sec_km")
+                        _tbl["Data"]       = _tbl["start_date"].dt.strftime("%d/%m/%Y")
+                        _tbl["Distância"]  = _tbl["distance_km"].apply(lambda x: f"{x:.2f} km")
+                        _tbl["Pace"]       = fmt_pace_vec(_tbl["pace_sec_km"])
+                        _tbl["FC Média"]   = _tbl["average_heartrate"].apply(
+                            lambda x: f"{x:.0f} bpm" if pd.notna(x) else "—")
+                        _tbl["Elevação"]   = _tbl["elevation_gain"].apply(
+                            lambda x: f"{x:.0f} m" if pd.notna(x) else "—")
+                        _tbl["Suffer"]     = _tbl["suffer_score"].apply(
+                            lambda x: f"{x:.0f}" if pd.notna(x) else "—")
+                        st.dataframe(
+                            _tbl[["Data","name","Distância","Pace","FC Média","Elevação","Suffer"]]
+                            .rename(columns={"name":"Atividade","Suffer":"Suffer Score"}),
+                            hide_index=True, use_container_width=True)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  3 · CARGA & ZONAS  —  gestão de carga + fisiologia cardíaca
 # ══════════════════════════════════════════════════════════════════════════════
