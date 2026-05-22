@@ -633,12 +633,13 @@ def analyze_run(laps):
 
 # ══════════════════════════════════════════════════════════════════════════════
 
-tab_hoje, tab_desemp, tab_carga, tab_mapa, tab_hist = st.tabs([
+tab_hoje, tab_desemp, tab_carga, tab_mapa, tab_hist, tab_sugerir = st.tabs([
     "🏠 Dashboard",
     "⚡ Desempenho",
     "💓 Carga & Zonas",
     "🗺️ Mapa",
     "📋 Histórico",
+    "🎯 Sugerir Rota",
 ])
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2362,3 +2363,417 @@ with tab_hist:
                     lambda x: f"{x:.0f} m" if not pd.isna(x) else "—")
                 st.dataframe(df_laps_tab.rename(columns=cols_lap),
                              hide_index=True, width="stretch")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  6 · SUGERIR ROTA  — recomendação baseada em histórico + ORS (novo)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@st.cache_data(show_spinner=False)
+def _build_route_clusters(df):
+    """
+    Agrupa corridas em rotas únicas pela posição de largada (±500m).
+    Retorna lista de dicts com info agregada por rota.
+    """
+    df2 = df[df["latitude"].notna() & df["longitude"].notna()].copy()
+    if df2.empty:
+        return []
+    # Arredonda para ~500m de precisão
+    df2["_clat"] = (df2["latitude"]  * 200).round() / 200
+    df2["_clng"] = (df2["longitude"] * 200).round() / 200
+    routes = []
+    for (clat, clng), grp in df2.groupby(["_clat", "_clng"]):
+        grp = grp.sort_values("start_date", ascending=False)
+        is_trail = (
+            (grp["sport_type"] == "TrailRun").any() or
+            grp["name"].str.lower().str.contains(
+                r"trilha|trail|morro|pico|serra|monte|subida", regex=True, na=False
+            ).any()
+        )
+        routes.append({
+            "clat":        float(clat),
+            "clng":        float(clng),
+            "n_runs":      len(grp),
+            "last_date":   grp["start_date"].iloc[0],
+            "last_name":   str(grp["name"].iloc[0]),
+            "avg_km":      float(grp["distance_km"].mean()),
+            "avg_elev":    float(grp["elevation_gain"].mean()) if grp["elevation_gain"].notna().any() else 0.0,
+            "avg_pace":    float(grp["pace_sec_km"].mean())    if grp["pace_sec_km"].notna().any() else 0.0,
+            "best_pace":   float(grp["pace_sec_km"].min())     if grp["pace_sec_km"].notna().any() else 0.0,
+            "is_trail":    bool(is_trail),
+            "polylines":   grp["map_summary_polyline"].dropna().tolist()[:3],
+            "ids":         grp["id"].tolist(),
+        })
+    return routes
+
+
+def _score_route_match(route, target_km, elev_per_10km_min, elev_per_10km_max, surface_pref):
+    """
+    Score 0–100 de compatibilidade entre rota e critérios.
+    Distância 50% | Altimetria 35% | Superfície 15%
+    """
+    # Distância
+    ratio = abs(route["avg_km"] - target_km) / max(target_km, 0.1)
+    dist_score = max(0.0, 1.0 - ratio * 2.0)  # 0 em ±50%
+
+    # Altimetria normalizada por 10km
+    elev_10 = route["avg_elev"] / max(route["avg_km"], 0.1) * 10
+    if elev_per_10km_max == float("inf"):
+        # montanhoso: quanto mais alto melhor, referência 200 m/10km
+        elev_score = min(1.0, elev_10 / max(elev_per_10km_min, 10.0))
+    elif elev_per_10km_min <= elev_10 <= elev_per_10km_max:
+        elev_score = 1.0
+    else:
+        margin = max(elev_per_10km_max - elev_per_10km_min, 20)
+        dist_from_range = min(
+            abs(elev_10 - elev_per_10km_min),
+            abs(elev_10 - elev_per_10km_max)
+        )
+        elev_score = max(0.0, 1.0 - dist_from_range / margin)
+
+    # Superfície
+    if surface_pref == "Tanto faz":
+        surf_score = 1.0
+    elif surface_pref == "Trilha":
+        surf_score = 1.0 if route["is_trail"] else 0.1
+    else:  # Asfalto
+        surf_score = 0.1 if route["is_trail"] else 1.0
+
+    return round(dist_score * 50 + elev_score * 35 + surf_score * 15, 1)
+
+
+def _ors_round_trip(lat, lng, target_m, profile, seed, ors_key):
+    """
+    Chama OpenRouteService directions com opção round_trip.
+    Retorna lista de coords [(lat,lng), ...] ou None se falhar.
+    """
+    import requests
+    url = f"https://api.openrouteservice.org/v2/directions/{profile}/geojson"
+    body = {
+        "coordinates": [[lng, lat]],
+        "options": {
+            "round_trip": {
+                "length":    target_m,
+                "points":    5,
+                "seed":      seed,
+            }
+        }
+    }
+    try:
+        r = requests.post(
+            url,
+            json=body,
+            headers={"Authorization": ors_key, "Content-Type": "application/json"},
+            timeout=10,
+        )
+        if r.status_code == 200:
+            feat = r.json()["features"][0]
+            # ORS retorna [lng, lat] — inverter para [lat, lng]
+            coords = [(c[1], c[0]) for c in feat["geometry"]["coordinates"]]
+            props  = feat["properties"]["summary"]
+            elev   = feat["properties"].get("ascent", 0)
+            return {"coords": coords, "distance_m": props["distance"], "elevation_m": elev}
+    except Exception:
+        pass
+    return None
+
+
+with tab_sugerir:
+    st.title("🎯 Sugerir Rota")
+    st.caption("Encontra rotas do seu histórico que batem com seus critérios — ou gera um circuito novo via OpenRouteService.")
+
+    # ── Inputs ──────────────────────────────────────────────────────────────
+    with st.expander("🎛️ Parâmetros da busca", expanded=True):
+        c1, c2, c3 = st.columns(3)
+
+        with c1:
+            sug_km = st.slider(
+                "📏 Distância alvo (km)", 3.0, 60.0, 10.0, 0.5, key="sug_dist"
+            )
+            sug_tol = st.slider(
+                "Tolerância (%)", 10, 50, 25, 5, key="sug_tol",
+                help="Faixa aceita: ex. 10km ±25% = 7.5–12.5 km"
+            )
+
+        with c2:
+            sug_terreno = st.selectbox(
+                "⛰️ Terreno",
+                [
+                    "Plano  (< 50 m/10km)",
+                    "Ondulado  (50–150 m/10km)",
+                    "Montanhoso  (> 150 m/10km)",
+                    "Definir ganho manualmente",
+                ],
+                key="sug_terreno",
+            )
+            if sug_terreno.startswith("Definir"):
+                sug_elev_target = st.slider(
+                    "Ganho alvo (m)", 0, 2000, 200, 25, key="sug_elev"
+                )
+                _e_min = sug_elev_target * 0.6 / max(sug_km, 1) * 10
+                _e_max = sug_elev_target * 1.4 / max(sug_km, 1) * 10
+            elif "Plano" in sug_terreno:
+                _e_min, _e_max = 0.0, 50.0
+            elif "Ondulado" in sug_terreno:
+                _e_min, _e_max = 50.0, 150.0
+            else:
+                _e_min, _e_max = 150.0, float("inf")
+
+        with c3:
+            sug_surf = st.selectbox(
+                "🏃 Superfície", ["Tanto faz", "Asfalto / Estradão", "Trilha"],
+                key="sug_surf"
+            )
+            _surf_pref = (
+                "Trilha"  if sug_surf == "Trilha"
+                else "Asfalto" if "Asfalto" in sug_surf
+                else "Tanto faz"
+            )
+            sug_top_n = st.slider("Nº de sugestões", 3, 10, 5, 1, key="sug_n")
+
+    # ── Histórico ────────────────────────────────────────────────────────────
+    st.subheader("📚 Do seu histórico")
+
+    _runs_sug = _runs_raw.copy() if not _runs_raw.empty else df_raw.copy()
+    _route_clusters = _build_route_clusters(_runs_sug)
+
+    if not _route_clusters:
+        st.info("Nenhuma corrida com coordenadas disponíveis.")
+    else:
+        # Calcula score para cada rota
+        _km_min = sug_km * (1 - sug_tol / 100)
+        _km_max = sug_km * (1 + sug_tol / 100)
+
+        for rt in _route_clusters:
+            rt["score"]  = _score_route_match(rt, sug_km, _e_min, _e_max, _surf_pref)
+            rt["in_range"] = _km_min <= rt["avg_km"] <= _km_max
+
+        # Ordena: em_range primeiro, depois por score
+        _scored = sorted(
+            _route_clusters,
+            key=lambda r: (not r["in_range"], -r["score"])
+        )
+
+        _top = _scored[:sug_top_n]
+
+        if not _top:
+            st.info("Nenhuma rota encontrada com esses critérios. Tente aumentar a tolerância.")
+        else:
+            # Mapa com as rotas sugeridas
+            _sug_colors = [
+                "#2ecc71","#3498db","#e67e22","#9b59b6","#e74c3c",
+                "#1abc9c","#f39c12","#2980b9","#8e44ad","#c0392b",
+            ]
+
+            _map_center_lat = float(sum(r["clat"] for r in _top) / len(_top))
+            _map_center_lng = float(sum(r["clng"] for r in _top) / len(_top))
+            _sug_map = folium.Map(
+                location=[_map_center_lat, _map_center_lng],
+                zoom_start=13, tiles=None, control_scale=True
+            )
+            folium.TileLayer(
+                "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+                attr="CartoDB",
+                name="Dark",
+                max_zoom=19,
+            ).add_to(_sug_map)
+
+            for _ri, _rt in enumerate(_top):
+                _col = _sug_colors[_ri % len(_sug_colors)]
+                # Marcador de largada
+                _pace_str = (
+                    f"{int(_rt['avg_pace']//60)}:{int(_rt['avg_pace']%60):02d}/km"
+                    if _rt["avg_pace"] > 0 else "—"
+                )
+                _popup_txt = (
+                    f"<b>#{_ri+1} — {_rt['last_name'][:35]}</b><br>"
+                    f"📏 {_rt['avg_km']:.1f} km &nbsp;|&nbsp; "
+                    f"⛰️ {_rt['avg_elev']:.0f} m &nbsp;|&nbsp; "
+                    f"⏱ {_pace_str}<br>"
+                    f"🔁 {_rt['n_runs']} vez(es) &nbsp;|&nbsp; "
+                    f"Score: {_rt['score']:.0f}/100"
+                )
+                folium.CircleMarker(
+                    [_rt["clat"], _rt["clng"]],
+                    radius=10,
+                    color=_col, fill=True, fill_color=_col, fill_opacity=0.9,
+                    popup=folium.Popup(_popup_txt, max_width=280),
+                    tooltip=f"#{_ri+1} — {_rt['avg_km']:.1f}km · Score {_rt['score']:.0f}",
+                ).add_to(_sug_map)
+
+                # Polylines (até 3 corridas desta rota)
+                for _poly_str in _rt["polylines"]:
+                    if _poly_str and len(str(_poly_str)) > 5:
+                        _pts = decode_polyline(str(_poly_str))
+                        if _pts:
+                            folium.PolyLine(
+                                _pts, color=_col, weight=3.5,
+                                opacity=0.75, smooth_factor=1,
+                            ).add_to(_sug_map)
+
+            # Fit bounds
+            all_lats = [r["clat"] for r in _top]
+            all_lngs = [r["clng"] for r in _top]
+            _sug_map.fit_bounds([
+                [min(all_lats) - 0.02, min(all_lngs) - 0.02],
+                [max(all_lats) + 0.02, max(all_lngs) + 0.02],
+            ])
+
+            components.html(_sug_map._repr_html_(), height=420)
+
+            # Cards das sugestões
+            st.markdown("---")
+            _card_cols = st.columns(min(len(_top), 3))
+            for _ri, _rt in enumerate(_top):
+                with _card_cols[_ri % 3]:
+                    _pace_str2 = (
+                        f"{int(_rt['avg_pace']//60)}:{int(_rt['avg_pace']%60):02d}/km"
+                        if _rt["avg_pace"] > 0 else "—"
+                    )
+                    _best_str = (
+                        f"{int(_rt['best_pace']//60)}:{int(_rt['best_pace']%60):02d}/km"
+                        if _rt["best_pace"] > 0 else "—"
+                    )
+                    _surf_icon = "🏔️" if _rt["is_trail"] else "🛣️"
+                    _score_bar = "█" * int(_rt["score"] / 10) + "░" * (10 - int(_rt["score"] / 10))
+                    _in_rng_badge = "✅" if _rt["in_range"] else "⚠️"
+
+                    st.markdown(
+                        f"""
+<div style="border:1px solid #444;border-radius:8px;padding:10px 12px;margin-bottom:8px;background:#1e1e2e">
+  <div style="font-size:1.05em;font-weight:700;margin-bottom:4px">
+    {_sug_colors[_ri % len(_sug_colors)] and "●"} #{_ri+1} {_surf_icon} {_rt["last_name"][:30]}
+  </div>
+  <div style="font-size:0.85em;color:#aaa;margin-bottom:6px">
+    Última: {_rt["last_date"].strftime("%d/%m/%Y") if hasattr(_rt["last_date"],"strftime") else str(_rt["last_date"])[:10]}
+    &nbsp;·&nbsp; {_rt["n_runs"]} corrida(s)
+  </div>
+  <div style="display:flex;gap:12px;flex-wrap:wrap;font-size:0.88em">
+    <span>📏 <b>{_rt["avg_km"]:.1f} km</b> {_in_rng_badge}</span>
+    <span>⛰️ <b>{_rt["avg_elev"]:.0f} m</b></span>
+    <span>⏱ <b>{_pace_str2}</b></span>
+    <span>🏆 <b>{_best_str}</b></span>
+  </div>
+  <div style="margin-top:6px;font-size:0.8em;color:#888">
+    Score: <code style="color:#7eb8f7">{_rt["score"]:.0f}/100</code>
+    &nbsp; <span style="font-family:monospace;color:#7eb8f7">{_score_bar}</span>
+  </div>
+</div>""",
+                        unsafe_allow_html=True,
+                    )
+
+    # ── Rotas Novas via ORS ──────────────────────────────────────────────────
+    st.markdown("---")
+    st.subheader("🆕 Gerar rota nova")
+
+    with st.expander("ℹ️ Como funciona?"):
+        st.markdown("""
+**OpenRouteService (ORS)** é uma API gratuita baseada em OpenStreetMap que gera
+circuitos a partir de um ponto de partida, respeitando distância e perfil de terreno.
+
+Para usar:
+1. Cadastre-se gratuitamente em **[openrouteservice.org](https://openrouteservice.org/dev/#/signup)**
+2. Copie sua API Key no painel
+3. Cole abaixo
+
+O plano gratuito oferece 2.000 requisições/dia — mais do que suficiente para uso pessoal.
+""")
+
+    _ors_col1, _ors_col2 = st.columns([2, 1])
+    with _ors_col1:
+        ors_key = st.text_input(
+            "🔑 API Key OpenRouteService (opcional)",
+            type="password",
+            placeholder="ey...",
+            key="sug_ors_key",
+        )
+    with _ors_col2:
+        ors_profile = st.selectbox(
+            "Perfil", ["foot-hiking", "foot-walking"], key="sug_ors_profile",
+            help="foot-hiking prioriza trilhas e terrenos naturais"
+        )
+
+    if ors_key:
+        # Ponto de largada: centro do cluster mais frequente do histórico
+        if _route_clusters:
+            _most_freq = max(_route_clusters, key=lambda r: r["n_runs"])
+            _default_lat = _most_freq["clat"]
+            _default_lng = _most_freq["clng"]
+        else:
+            _default_lat, _default_lng = -27.5954, -48.5480  # Florianópolis
+
+        _ors_c1, _ors_c2, _ors_c3 = st.columns(3)
+        with _ors_c1:
+            ors_lat = st.number_input("Latitude largada", value=_default_lat,
+                                       format="%.5f", key="sug_ors_lat")
+            ors_lng = st.number_input("Longitude largada", value=_default_lng,
+                                       format="%.5f", key="sug_ors_lng")
+        with _ors_c2:
+            ors_km   = st.slider("Distância (km)", 3.0, 60.0, float(sug_km), 0.5,
+                                  key="sug_ors_km")
+            ors_seed = st.slider("Variação de traçado (seed)", 1, 10, 1, 1,
+                                  key="sug_ors_seed",
+                                  help="Muda o traçado sem alterar os demais parâmetros")
+        with _ors_c3:
+            st.markdown("<br>", unsafe_allow_html=True)
+            ors_go = st.button("🗺️ Gerar rota", key="sug_ors_go", use_container_width=True)
+
+        if ors_go:
+            with st.spinner("Consultando OpenRouteService..."):
+                _ors_result = _ors_round_trip(
+                    float(ors_lat), float(ors_lng),
+                    int(ors_km * 1000),
+                    ors_profile,
+                    int(ors_seed),
+                    ors_key,
+                )
+            if _ors_result is None:
+                st.error("❌ Não foi possível gerar a rota. Verifique a API Key e tente novamente.")
+            else:
+                _ors_dist = _ors_result["distance_m"] / 1000
+                _ors_elev = _ors_result["elevation_m"]
+                st.success(
+                    f"✅ Rota gerada: **{_ors_dist:.1f} km** · "
+                    f"**{_ors_elev:.0f} m** de ganho · "
+                    f"~{int(_ors_dist / max(sug_km,0.1) * 100):.0f}% do alvo"
+                )
+                # Mapa ORS
+                _ors_pts = _ors_result["coords"]
+                _ors_map = folium.Map(location=_ors_pts[0], zoom_start=14,
+                                       tiles=None, control_scale=True)
+                folium.TileLayer(
+                    "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+                    attr="CartoDB", name="Dark", max_zoom=19,
+                ).add_to(_ors_map)
+                folium.PolyLine(_ors_pts, color="#2ecc71", weight=4.5,
+                                 opacity=0.9).add_to(_ors_map)
+                folium.CircleMarker(
+                    _ors_pts[0], radius=10, color="#f1c40f",
+                    fill=True, fill_color="#f1c40f", fill_opacity=1.0,
+                    tooltip="Largada / Chegada",
+                ).add_to(_ors_map)
+                _ors_map.fit_bounds([
+                    [min(p[0] for p in _ors_pts), min(p[1] for p in _ors_pts)],
+                    [max(p[0] for p in _ors_pts), max(p[1] for p in _ors_pts)],
+                ])
+                components.html(_ors_map._repr_html_(), height=450)
+
+                # Download GPX
+                _gpx_lines = [
+                    '<?xml version="1.0" encoding="UTF-8"?>',
+                    '<gpx version="1.1" creator="PerformanceRun">',
+                    '  <trk><name>Rota Sugerida</name><trkseg>',
+                ]
+                for _p in _ors_pts:
+                    _gpx_lines.append(f'    <trkpt lat="{_p[0]:.6f}" lon="{_p[1]:.6f}"/>')
+                _gpx_lines += ["  </trkseg></trk>", "</gpx>"]
+                _gpx_str = "\n".join(_gpx_lines)
+                st.download_button(
+                    "⬇️ Baixar GPX",
+                    data=_gpx_str,
+                    file_name="rota_sugerida.gpx",
+                    mime="application/gpx+xml",
+                    key="sug_gpx_dl",
+                )
+    else:
+        st.caption("💡 Sem API Key, só as rotas do histórico ficam disponíveis. Funciona muito bem para quem já tem um bom volume de corridas!")
