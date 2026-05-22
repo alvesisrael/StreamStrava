@@ -2442,25 +2442,21 @@ def _score_route_match(route, target_km, elev_per_10km_min, elev_per_10km_max, s
     return round(dist_score * 50 + elev_score * 35 + surf_score * 15, 1)
 
 
-def _ors_round_trip(lat, lng, target_m, profile, seed, ors_key, steepness_level=0):
-    """
-    Chama OpenRouteService directions com opção round_trip.
-    steepness_level: 0=sem preferência/busca subidas · 1=leve · 2=moderado · 3=evita subidas (plano)
-    Retorna dict com coords, distance_m, elevation_m ou None se falhar.
-    """
+def _ors_single(lat, lng, target_m, profile, seed, ors_key, steepness_level):
+    """Uma única chamada ORS round_trip com elevation=True."""
     import requests
     url = f"https://api.openrouteservice.org/v2/directions/{profile}/geojson"
     body = {
         "coordinates": [[lng, lat]],
+        "elevation": True,          # ← ESSENCIAL para obter ascent/descent reais
         "options": {
             "round_trip": {
-                "length":    target_m,
-                "points":    5,
-                "seed":      seed,
+                "length": target_m,
+                "points": 5,
+                "seed":   seed,
             }
         }
     }
-    # Aplica preferência de inclinação se != 0 (0 = busca subidas livremente)
     if steepness_level > 0:
         body["options"]["profile_params"] = {
             "weightings": {"steepness_difficulty": {"level": steepness_level}}
@@ -2470,18 +2466,47 @@ def _ors_round_trip(lat, lng, target_m, profile, seed, ors_key, steepness_level=
             url,
             json=body,
             headers={"Authorization": ors_key, "Content-Type": "application/json"},
-            timeout=10,
+            timeout=12,
         )
         if r.status_code == 200:
-            feat = r.json()["features"][0]
-            # ORS retorna [lng, lat] — inverter para [lat, lng]
+            feat  = r.json()["features"][0]
+            props = feat["properties"]
+            # Coordenadas: ORS retorna [lng, lat, alt] quando elevation=True
             coords = [(c[1], c[0]) for c in feat["geometry"]["coordinates"]]
-            props  = feat["properties"]["summary"]
-            elev   = feat["properties"].get("ascent", 0)
-            return {"coords": coords, "distance_m": props["distance"], "elevation_m": elev}
+            ascent = props.get("ascent") or props.get("summary", {}).get("ascent", 0) or 0
+            dist   = props.get("summary", {}).get("distance", 0)
+            return {"coords": coords, "distance_m": dist, "elevation_m": float(ascent)}
     except Exception:
         pass
     return None
+
+
+def _ors_round_trip(lat, lng, target_m, profile, seeds, ors_key, steepness_level=0):
+    """
+    Gera múltiplos traçados (um por seed) e devolve o melhor:
+    - Se steepness_level == 0 (quer subidas): retorna o de MAIOR ganho de elevação
+    - Se steepness_level == 3 (quer plano):   retorna o de MENOR ganho de elevação
+    - Caso contrário: retorna o mais próximo do alvo de elevação (passado como seeds[-1])
+    seeds: lista de ints (seeds a testar) + último elemento = target_elev_m (int)
+    """
+    target_elev = seeds[-1]
+    seed_list   = seeds[:-1]
+    results = []
+    for s in seed_list:
+        r = _ors_single(lat, lng, target_m, profile, s, ors_key, steepness_level)
+        if r:
+            results.append(r)
+    if not results:
+        return None
+    if steepness_level == 0:
+        # Quer montanha: pega o com mais elevação
+        return max(results, key=lambda x: x["elevation_m"])
+    elif steepness_level == 3:
+        # Quer plano: pega o com menos elevação
+        return min(results, key=lambda x: x["elevation_m"])
+    else:
+        # Ondulado: pega o mais próximo do alvo
+        return min(results, key=lambda x: abs(x["elevation_m"] - target_elev))
 
 
 with tab_sugerir:
@@ -2740,20 +2765,20 @@ O plano gratuito oferece 2.000 requisições/dia — mais do que suficiente para
                 _ors_steepness = 0   # montanhoso: busca subidas
                 _ors_perfil_lbl = "⛰️ Montanhoso"
             st.caption(f"Perfil derivado: **{_ors_perfil_lbl}** ({_ors_elev_per_10:.0f} m/10km)")
-            ors_seed = st.slider("Variação de traçado (seed)", 1, 10, 1, 1,
-                                  key="sug_ors_seed",
-                                  help="Muda o traçado sem alterar os demais parâmetros")
+            # seed slider removed — now auto-tries 6 seeds and picks best
         with _ors_c3:
             st.markdown("<br>", unsafe_allow_html=True)
             ors_go = st.button("🗺️ Gerar rota", key="sug_ors_go", use_container_width=True)
 
         if ors_go:
-            with st.spinner("Consultando OpenRouteService..."):
+            # Gera 6 traçados e escolhe o melhor para o perfil pedido
+            _seeds_to_try = list(range(1, 7)) + [int(ors_elev)]  # último = target_elev_m
+            with st.spinner(f"Testando 6 traçados e escolhendo o melhor para {ors_elev} m de ganho..."):
                 _ors_result = _ors_round_trip(
                     float(ors_lat), float(ors_lng),
                     int(ors_km * 1000),
                     ors_profile,
-                    int(ors_seed),
+                    _seeds_to_try,
                     ors_key,
                     steepness_level=_ors_steepness,
                 )
@@ -2761,11 +2786,16 @@ O plano gratuito oferece 2.000 requisições/dia — mais do que suficiente para
                 st.error("❌ Não foi possível gerar a rota. Verifique a API Key e tente novamente.")
             else:
                 _ors_dist = _ors_result["distance_m"] / 1000
-                _ors_elev = _ors_result["elevation_m"]
+                _ors_elev_real = _ors_result["elevation_m"]
+                _elev_diff = _ors_elev_real - ors_elev
+                _elev_pct  = int(_ors_elev_real / max(ors_elev, 1) * 100)
+                _elev_badge = (
+                    f"✅ {_ors_elev_real:.0f} m ({_elev_pct}% do alvo)"
+                    if abs(_elev_diff) / max(ors_elev, 1) < 0.30
+                    else f"⚠️ {_ors_elev_real:.0f} m ({_elev_pct}% do alvo — terreno disponível pode ser limitado)"
+                )
                 st.success(
-                    f"✅ Rota gerada: **{_ors_dist:.1f} km** · "
-                    f"**{_ors_elev:.0f} m** de ganho · "
-                    f"~{int(_ors_dist / max(sug_km,0.1) * 100):.0f}% do alvo"
+                    f"🗺️ Rota gerada: **{_ors_dist:.1f} km** · ⛰️ {_elev_badge}"
                 )
                 # Mapa ORS
                 _ors_pts = _ors_result["coords"]
