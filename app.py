@@ -2717,22 +2717,29 @@ O plano gratuito oferece 2.000 requisições/dia — mais do que suficiente para
         with _ors_c2:
             ors_km   = st.slider("Distância (km)", 3.0, 60.0, float(sug_km), 0.5,
                                   key="sug_ors_km")
-            ors_terreno = st.selectbox(
-                "⛰️ Ganho de elevação",
-                [
-                    "Montanhoso  (busca subidas)",
-                    "Ondulado  (moderado)",
-                    "Plano  (evita subidas)",
-                ],
-                index=1,
-                key="sug_ors_terreno",
-                help="Controla o quanto o traçado vai buscar ou evitar subidas",
+            ors_elev = st.slider(
+                "⛰️ Ganho de elevação alvo (m)", 0, 2000,
+                value=min(200, int(_runs_sug["elevation_gain"].median())
+                          if not _runs_sug.empty and _runs_sug["elevation_gain"].notna().any()
+                          else 200),
+                step=25, key="sug_ors_elev",
+                help="Ganho total desejado. O ORS vai tentar encontrar um traçado com esse perfil de subida.",
             )
-            _ors_steepness = (
-                0 if "Montanhoso" in ors_terreno
-                else 1 if "Ondulado" in ors_terreno
-                else 3
-            )
+            # Deriva steepness do ORS a partir de m/10km
+            _ors_elev_per_10 = ors_elev / max(ors_km, 0.1) * 10
+            if _ors_elev_per_10 < 40:
+                _ors_steepness = 3   # plano: evita subidas
+                _ors_perfil_lbl = "🛣️ Plano"
+            elif _ors_elev_per_10 < 100:
+                _ors_steepness = 2   # leve
+                _ors_perfil_lbl = "〰️ Levemente ondulado"
+            elif _ors_elev_per_10 < 180:
+                _ors_steepness = 1   # ondulado
+                _ors_perfil_lbl = "🌊 Ondulado"
+            else:
+                _ors_steepness = 0   # montanhoso: busca subidas
+                _ors_perfil_lbl = "⛰️ Montanhoso"
+            st.caption(f"Perfil derivado: **{_ors_perfil_lbl}** ({_ors_elev_per_10:.0f} m/10km)")
             ors_seed = st.slider("Variação de traçado (seed)", 1, 10, 1, 1,
                                   key="sug_ors_seed",
                                   help="Muda o traçado sem alterar os demais parâmetros")
