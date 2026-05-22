@@ -2442,10 +2442,11 @@ def _score_route_match(route, target_km, elev_per_10km_min, elev_per_10km_max, s
     return round(dist_score * 50 + elev_score * 35 + surf_score * 15, 1)
 
 
-def _ors_round_trip(lat, lng, target_m, profile, seed, ors_key):
+def _ors_round_trip(lat, lng, target_m, profile, seed, ors_key, steepness_level=0):
     """
     Chama OpenRouteService directions com opção round_trip.
-    Retorna lista de coords [(lat,lng), ...] ou None se falhar.
+    steepness_level: 0=sem preferência/busca subidas · 1=leve · 2=moderado · 3=evita subidas (plano)
+    Retorna dict com coords, distance_m, elevation_m ou None se falhar.
     """
     import requests
     url = f"https://api.openrouteservice.org/v2/directions/{profile}/geojson"
@@ -2459,6 +2460,11 @@ def _ors_round_trip(lat, lng, target_m, profile, seed, ors_key):
             }
         }
     }
+    # Aplica preferência de inclinação se != 0 (0 = busca subidas livremente)
+    if steepness_level > 0:
+        body["options"]["profile_params"] = {
+            "weightings": {"steepness_difficulty": {"level": steepness_level}}
+        }
     try:
         r = requests.post(
             url,
@@ -2711,6 +2717,22 @@ O plano gratuito oferece 2.000 requisições/dia — mais do que suficiente para
         with _ors_c2:
             ors_km   = st.slider("Distância (km)", 3.0, 60.0, float(sug_km), 0.5,
                                   key="sug_ors_km")
+            ors_terreno = st.selectbox(
+                "⛰️ Ganho de elevação",
+                [
+                    "Montanhoso  (busca subidas)",
+                    "Ondulado  (moderado)",
+                    "Plano  (evita subidas)",
+                ],
+                index=1,
+                key="sug_ors_terreno",
+                help="Controla o quanto o traçado vai buscar ou evitar subidas",
+            )
+            _ors_steepness = (
+                0 if "Montanhoso" in ors_terreno
+                else 1 if "Ondulado" in ors_terreno
+                else 3
+            )
             ors_seed = st.slider("Variação de traçado (seed)", 1, 10, 1, 1,
                                   key="sug_ors_seed",
                                   help="Muda o traçado sem alterar os demais parâmetros")
@@ -2726,6 +2748,7 @@ O plano gratuito oferece 2.000 requisições/dia — mais do que suficiente para
                     ors_profile,
                     int(ors_seed),
                     ors_key,
+                    steepness_level=_ors_steepness,
                 )
             if _ors_result is None:
                 st.error("❌ Não foi possível gerar a rota. Verifique a API Key e tente novamente.")
