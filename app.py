@@ -1483,6 +1483,7 @@ def _haversine_km(c1, c2):
 
 
 @st.cache_data(show_spinner=False, max_entries=80)
+@st.cache_data(ttl=1800, show_spinner=False, max_entries=12)
 def _build_route_map_html(
     act_data:  tuple,   # ((id, name, date_str, km, pace_sec, hr, elev, color, poly_str, insights_str), ...)
     laps_data: tuple,   # ((act_id, lap_idx, dist_km, pace_sec, hr, max_hr, elev_gain, time_sec), ...)
@@ -1669,10 +1670,15 @@ def _build_route_map_html(
                             lap[_m_idx], _m_min, _m_max,
                             high_is_red=_HIGH_IS_RED.get(color_by, True)
                         )
-                        # segmento visível colorido por métrica
-                        folium.PolyLine(
-                            seg, color=seg_color, weight=5, opacity=0.92,
-                        ).add_to(fg)
+                        # segmento animado colorido por métrica (AntPath por lap)
+                        try:
+                            from folium.plugins import AntPath
+                            AntPath(
+                                seg, color=seg_color, weight=5,
+                                dash_array=[12, 20], delay=800, opacity=0.92,
+                            ).add_to(fg)
+                        except Exception:
+                            folium.PolyLine(seg, color=seg_color, weight=5, opacity=0.92).add_to(fg)
                         # overlay invisível para tooltip/popup
                         folium.PolyLine(
                             seg, color=seg_color, weight=14, opacity=0.001,
@@ -1708,7 +1714,18 @@ def _build_route_map_html(
 
         fg.add_to(m)
 
-    folium.LayerControl(collapsed=False, position="topright").add_to(m)
+    folium.LayerControl(collapsed=True, position="topright").add_to(m)
+    try:
+        from folium.plugins import MousePosition
+        MousePosition(
+            position="bottomleft",
+            separator=" | ",
+            prefix="📍",
+            lat_formatter="function(num){return num.toFixed(6);}",
+            lng_formatter="function(num){return num.toFixed(6);}",
+        ).add_to(m)
+    except Exception:
+        pass
     return m._repr_html_()
 
 
@@ -1981,36 +1998,50 @@ with tab_mapa:
 
     def _pace_in_range(laps_df, km_start_cand, km_end_cand):
         """
-        Extrai pace médio dos laps do candidato que cobrem [km_start_cand, km_end_cand].
-        Cada lap com split=N cobre aprox. de (N-1)km a N km.
-        Aceita sobreposição parcial.
+        Extrai pace medio dos laps que cobrem [km_start_cand, km_end_cand].
+        Usa distancia cumulativa real por lap - funciona com laps manuais ou auto-lap.
         """
-        # Splits que se sobrepõem com o intervalo
-        lap_ini = max(1, int(km_start_cand))        # 1º split que pode cobrir km_start_cand
-        lap_fim = int(km_end_cand) + 1              # último split que pode cobrir km_end_cand
-        sel = laps_df[
-            (laps_df["split"] >= lap_ini) &
-            (laps_df["split"] <= lap_fim) &
-            laps_df["pace_sec_km"].notna() &
-            (laps_df["pace_sec_km"] > 0) &
-            (laps_df["pace_sec_km"] < 600)   # < 10 min/km (caminhada trail ok)
+        if laps_df.empty:
+            return None, None
+        idx_col = ("lap_index" if "lap_index" in laps_df.columns
+                   else "split" if "split" in laps_df.columns
+                   else None)
+        laps_sorted = (laps_df.sort_values(idx_col) if idx_col
+                       else laps_df).reset_index(drop=True)
+        cum, matching = 0.0, []
+        for _, lap in laps_sorted.iterrows():
+            lap_dist = float(lap.get("distance_km") or 0)
+            lap_end  = cum + lap_dist
+            if lap_end > km_start_cand and cum < km_end_cand:
+                matching.append(lap)
+            cum = lap_end
+        if not matching:
+            return None, None
+        sel = pd.DataFrame(matching)
+        sel = sel[
+            sel["pace_sec_km"].notna() &
+            (sel["pace_sec_km"] > 0) &
+            (sel["pace_sec_km"] < 600)
         ]
         if sel.empty:
             return None, None
-        # Média ponderada por distância do lap
-        weights = sel["distance_km"] if "distance_km" in sel.columns else None
-        if weights is not None and weights.sum() > 0:
-            pace_avg = float((sel["pace_sec_km"] * sel["distance_km"]).sum() / sel["distance_km"].sum())
+        if "distance_km" in sel.columns and sel["distance_km"].sum() > 0:
+            pace_avg = float((sel["pace_sec_km"] * sel["distance_km"]).sum()
+                             / sel["distance_km"].sum())
         else:
             pace_avg = float(sel["pace_sec_km"].mean())
-        hr_avg = float(sel["average_heartrate"].mean())                  if "average_heartrate" in sel.columns and sel["average_heartrate"].notna().any()                  else float("nan")
+        hr_avg = (float(sel["average_heartrate"].mean())
+                  if "average_heartrate" in sel.columns
+                  and sel["average_heartrate"].notna().any()
+                  else float("nan"))
         return pace_avg, hr_avg
-
     with st.expander("🔍 Comparar trecho com outras corridas", expanded=False):
         st.caption(
             "Escolha uma corrida de referência e arraste o slider para definir o trecho. "
             "A busca usa **coordenadas GPS reais** — só aparecem corridas que "
-            "efetivamente passaram pelo mesmo lugar, independente do número do km.")
+            "efetivamente passaram pelo mesmo lugar, independente do número do km. "
+            "💡 **Dica:** passe o mouse no mapa para ver as coordenadas no canto inferior esquerdo "
+            "— útil para identificar o km exato de uma subida ou trecho específico.")
 
         # ── Corrida de referência ─────────────────────────────────────────────
         if len(df_map) > 1:
@@ -2094,8 +2125,7 @@ with tab_mapa:
                             _km_s_cand, _km_e_cand = _match
                             # Laps do candidato
                             _cand_laps = laps_raw[
-                                (laps_raw["activity_id"] == int(_cand["id"])) &
-                                laps_raw["split"].notna()
+                                laps_raw["activity_id"] == int(_cand["id"])
                             ]
                             _pace_cand, _hr_cand = _pace_in_range(
                                 _cand_laps, _km_s_cand, _km_e_cand)
@@ -2115,8 +2145,7 @@ with tab_mapa:
 
                         # Adiciona corrida de referência
                         _ref_laps = laps_raw[
-                            (laps_raw["activity_id"] == _cmp_ref_id) &
-                            laps_raw["split"].notna()
+                            laps_raw["activity_id"] == _cmp_ref_id
                         ]
                         _ref_pace, _ref_hr = _pace_in_range(_ref_laps, _km_ini, _km_fim)
                         if _ref_pace:
