@@ -3005,33 +3005,47 @@ with tab_sugerir:
             elif not _raw_segs:
                 st.warning("Nenhum segmento encontrado nessa região. Tente aumentar o raio de busca.")
             else:
-                st.success(f"✅ {len(_raw_segs)} segmentos encontrados na região.")
-
                 # ── 2. Enriquecer com SRTM ──────────────────────────────
-                with st.spinner("🛰️ Confirmando elevação real via dados SRTM (NASA)..."):
+                with st.spinner(f"🛰️ {len(_raw_segs)} segmentos encontrados — confirmando elevação via SRTM..."):
                     for _sg in _raw_segs:
                         _poly = _sg.get("points", "")
-                        if _poly:
-                            _sg["_srtm_ascent"] = _srtm_ascent(_poly)
-                        else:
-                            _sg["_srtm_ascent"] = float(_sg.get("elev_difference", 0))
+                        _srtm_val = _srtm_ascent(_poly) if _poly else 0.0
+                        # SRTM como fonte primária; fallback para dado Strava
+                        _sg["_srtm_ascent"] = _srtm_val if _srtm_val > 0 else float(_sg.get("elev_difference", 0))
 
                 # ── 3. Selecionar segmentos ──────────────────────────────
+                # Remove filtro de grade > 0 para regiões com poucos segmentos íngremes
                 _chosen = _select_segments_for_route(
                     _raw_segs, float(_seg_lat), float(_seg_lng),
                     float(_seg_elev), float(_seg_km), _seg_surf_pref,
                 )
 
-                if not _chosen:
+                _total_seg_elev = sum(s["_elev_gain"] for s in _chosen) if _chosen else 0
+                _elev_coverage  = _total_seg_elev / max(_seg_elev, 1) * 100
+
+                # Aviso se a cobertura de subida for muito baixa
+                if not _chosen or _total_seg_elev < _seg_elev * 0.2:
                     st.warning(
-                        "Não foi possível selecionar segmentos com subida suficiente nessa área. "
-                        "Tente aumentar o raio de busca ou reduzir o ganho alvo."
+                        f"⚠️ Apenas **{_total_seg_elev:.0f} m** de subida encontrados nos segmentos "
+                        f"Strava da região (meta: {_seg_elev} m). "
+                        "Os corredores locais cadastraram poucos segmentos íngremes no Strava aqui. "
+                        "A rota será gerada assim mesmo — use o ORS simples abaixo se quiser forçar mais subida."
                     )
+                    if not _chosen:
+                        # Usa todos os segmentos disponíveis como referência de direção
+                        _chosen = sorted(_raw_segs, key=lambda x: x.get("elev_difference", 0), reverse=True)[:5]
+                        for _sg in _chosen:
+                            _sg.setdefault("_dist_from_start_km", 0)
+                            _sg.setdefault("_elev_gain", float(_sg.get("elev_difference", 0)))
+                            sll = _sg.get("start_latlng") or [float(_seg_lat), float(_seg_lng)]
+                            ell = _sg.get("end_latlng")   or sll
+                            _sg.setdefault("_start_ll", sll)
+                            _sg.setdefault("_end_ll",   ell)
                 else:
-                    _total_seg_elev = sum(s["_elev_gain"] for s in _chosen)
-                    st.info(
-                        f"📐 {len(_chosen)} segmento(s) selecionado(s) · "
-                        f"Ganho acumulado pelos segmentos: **{_total_seg_elev:.0f} m**"
+                    st.success(
+                        f"✅ {len(_raw_segs)} segmentos encontrados · "
+                        f"{len(_chosen)} selecionado(s) · "
+                        f"Cobertura de subida: **{_total_seg_elev:.0f} m** ({_elev_coverage:.0f}% do alvo)"
                     )
 
                     # Tabela de segmentos escolhidos
