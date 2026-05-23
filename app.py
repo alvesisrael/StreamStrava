@@ -2479,8 +2479,8 @@ def _srtm_grid_hillpoints(lat: float, lng: float, radius_m: int, grid_m: int = 2
 
 
 def _select_waypoints(hillpoints, target_elev_m, target_km,
-                       min_spacing_m: int = 400, max_wps: int = 4):
-    """Seleciona waypoints de maior altitude garantindo espaco minimo entre eles."""
+                       min_spacing_m: int = 400, max_candidates: int = 12):
+    """Retorna ate max_candidates pontos altos bem espalhados para o builder tentar."""
     import math
 
     def _hav_m(la1, lo1, la2, lo2):
@@ -2488,16 +2488,14 @@ def _select_waypoints(hillpoints, target_elev_m, target_km,
         a = math.sin(dlat/2)**2 + math.cos(math.radians(la1))*math.cos(math.radians(la2))*math.sin(dlon/2)**2
         return 6_371_000 * 2 * math.asin(math.sqrt(a))
 
-    # prefer points with positive gain; fall back to all if none exist
     candidates = [p for p in hillpoints if p["gain"] > 5]
     if not candidates:
         candidates = list(hillpoints)
 
-    # distance budget: 65% of target left for waypoint legs
-    budget_m = target_km * 0.65 * 1000
-    selected, acc_dist = [], 0.0
+    budget_m = target_km * 0.70 * 1000
+    selected = []
     for p in candidates:
-        if len(selected) >= max_wps:
+        if len(selected) >= max_candidates:
             break
         too_close = any(
             _hav_m(p["lat"], p["lng"], s["lat"], s["lng"]) < min_spacing_m
@@ -2505,12 +2503,10 @@ def _select_waypoints(hillpoints, target_elev_m, target_km,
         )
         if too_close:
             continue
-        if acc_dist + p["dist_m"] * 2 > budget_m:
+        if p["dist_m"] * 2 > budget_m:
             continue
         selected.append(p)
-        acc_dist += p["dist_m"]
 
-    # sort by distance from home so the route flows outward then back
     selected.sort(key=lambda x: x["dist_m"])
     return selected
 
@@ -2550,28 +2546,43 @@ def _ors_leg(a_lat, a_lng, b_lat, b_lng, profile, ors_key):
 
 def _build_route_srtm_ors(start_lat, start_lng, target_km, target_elev_m,
                            profile, ors_key):
-    """Constroi rota usando grade SRTM para achar morros + ORS para conectar."""
+    """Constroi rota: grade SRTM -> waypoints altos -> pernas ORS com skip automatico."""
     radius_m = int(target_km / 4.0 * 1000)
     with st.spinner("Calculando elevacao SRTM da grade..."):
         hillpoints = _srtm_grid_hillpoints(start_lat, start_lng, radius_m)
     if not hillpoints:
-        return {"error": "SRTM nao retornou dados de elevacao para a sua regiao."}
+        return {"error": "SRTM nao retornou dados para a sua regiao."}
 
-    waypoints = _select_waypoints(hillpoints, target_elev_m, target_km)
-    if not waypoints:
+    # get many candidates so we can skip unroutable ones
+    candidates = _select_waypoints(hillpoints, target_elev_m, target_km)
+    if not candidates:
         return {"error": f"Nenhum ponto com elevacao positiva no raio de {radius_m/1000:.1f} km."}
 
+    # build route greedily: try each candidate; skip if ORS cannot reach it
     all_coords, total_dist, total_elev = [], 0.0, 0.0
     cur_lat, cur_lng = start_lat, start_lng
-    with st.spinner("Calculando pernas ORS..."):
-        for wp in waypoints:
+    used_wps, skipped = [], []
+    target_wps = 4
+
+    with st.spinner("Conectando waypoints via ORS..."):
+        for wp in candidates:
+            if len(used_wps) >= target_wps:
+                break
             leg = _ors_leg(cur_lat, cur_lng, wp["lat"], wp["lng"], profile, ors_key)
             if "error" in leg:
-                return {"error": f'ORS: {leg["error"]}'}
+                # 404 = no routable road near this grid point -> silently skip
+                skipped.append({**wp, "reason": leg["error"]})
+                continue
             all_coords += leg["coords"]
             total_dist  += leg["distance_m"]
             total_elev  += leg["elevation_m"]
             cur_lat, cur_lng = wp["lat"], wp["lng"]
+            used_wps.append(wp)
+
+        if not used_wps:
+            reasons = "; ".join(s["reason"] for s in skipped[:3])
+            return {"error": f"ORS nao encontrou rota para nenhum dos {len(skipped)} candidatos SRTM. {reasons}"}
+
         home_leg = _ors_leg(cur_lat, cur_lng, start_lat, start_lng, profile, ors_key)
         if "error" in home_leg:
             return {"error": f'ORS (volta): {home_leg["error"]}'}
@@ -2579,24 +2590,23 @@ def _build_route_srtm_ors(start_lat, start_lng, target_km, target_elev_m,
         total_dist  += home_leg["distance_m"]
         total_elev  += home_leg["elevation_m"]
 
-    if not all_coords:
-        return {"error": "Rota vazia - nenhuma perna calculada."}
-
     return {
-        "coords":       all_coords,
-        "distance_m":   total_dist,
-        "elevation_m":  total_elev,
-        "radius_m":     radius_m,
-        "top_elev":     hillpoints[0]["elev"] if hillpoints else 0,
-        "waypoints_used": len(waypoints),
+        "coords":         all_coords,
+        "distance_m":     total_dist,
+        "elevation_m":    total_elev,
+        "radius_m":       radius_m,
+        "top_elev":       hillpoints[0]["elev"] if hillpoints else 0,
+        "waypoints_used": len(used_wps),
+        "skipped":        len(skipped),
         "waypoints_info": [
             {
-                "lat":  w["lat"], "lng": w["lng"],
-                "elev": w["elev"],
-                "gain_m": round(w["gain"], 0),
+                "lat":     w["lat"],
+                "lng":     w["lng"],
+                "elev":    w["elev"],
+                "gain_m":  round(w["gain"], 0),
                 "dist_km": round(w["dist_m"] / 1000, 1),
             }
-            for w in waypoints
+            for w in used_wps
         ],
     }
 
@@ -2938,7 +2948,9 @@ with tab_sugerir:
                 st.success(
                     f"Rota gerada: **{_ri_km:.1f} km** | "
                     f"**{_ri_gain:.0f} m** de ganho | "
-                    f"{_ri_wps} waypoints SRTM | pico {_ri_top:.0f} m | raio {_ri_rad:.1f} km"
+                    f"{_ri_wps} waypoints usados"
+                    + (f" ({_ri_result['skipped']} pulados)" if _ri_result.get("skipped") else "")
+                    + f" | pico {_ri_top:.0f} m | raio {_ri_rad:.1f} km"
                 )
 
                 import folium
