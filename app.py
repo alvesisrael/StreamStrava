@@ -2591,6 +2591,114 @@ def _select_segments_for_route(
     return selected
 
 
+def _ors_leg(a_lat, a_lng, b_lat, b_lng, profile, ors_key):
+    """Rota ORS de A até B (2 pontos — free tier compatível).
+    Retorna {"coords": [(lat,lng),...], "distance_m": float, "elevation_m": float}
+    ou None em falha.
+    """
+    import requests
+    url  = f"https://api.openrouteservice.org/v2/directions/{profile}/geojson"
+    body = {
+        "coordinates": [[a_lng, a_lat], [b_lng, b_lat]],
+        "elevation": True,
+    }
+    try:
+        r = requests.post(
+            url, json=body,
+            headers={"Authorization": ors_key, "Content-Type": "application/json"},
+            timeout=12,
+        )
+        if r.status_code == 200:
+            feat   = r.json()["features"][0]
+            props  = feat["properties"]
+            coords = [(c[1], c[0]) for c in feat["geometry"]["coordinates"]]
+            ascent = props.get("ascent") or props.get("summary", {}).get("ascent", 0) or 0
+            dist   = props.get("summary", {}).get("distance", 0)
+            return {"coords": coords, "distance_m": dist, "elevation_m": float(ascent)}
+        if r.status_code in (401, 403):
+            try:
+                msg = r.json().get("error", {})
+                msg = msg.get("message", str(r.status_code)) if isinstance(msg, dict) else str(msg)
+            except Exception:
+                msg = str(r.status_code)
+            return {"error": f"ORS {r.status_code}: {msg}"}
+    except Exception as exc:
+        return {"error": str(exc)}
+    return None
+
+
+def _build_segment_route(start_lat, start_lng, chosen_segments, profile, ors_key):
+    """Constrói rota em pernas usando as polylines reais dos segmentos Strava:
+
+        Casa → [ORS A→B] → início seg1 → [polyline seg1] → fim seg1
+             → [ORS A→B] → início seg2 → [polyline seg2] → fim seg2
+             → ...
+             → [ORS A→B] → Casa
+
+    Cada ORS call usa apenas 2 pontos (free tier compatível).
+    Retorna {"coords": [...], "distance_m": float, "elevation_m": float,
+             "legs": int} ou {"error": "..."}.
+    """
+    all_coords  = []
+    total_dist  = 0.0
+    total_elev  = 0.0
+    current_lat = start_lat
+    current_lng = start_lng
+
+    for seg in chosen_segments:
+        seg_start = seg.get("_start_ll", [start_lat, start_lng])
+        seg_end   = seg.get("_end_ll",   seg_start)
+        seg_poly  = seg.get("points", "")
+
+        # Perna de ida: posição atual → início do segmento
+        leg = _ors_leg(current_lat, current_lng, seg_start[0], seg_start[1], profile, ors_key)
+        if leg is None:
+            continue
+        if "error" in leg:
+            return leg
+        all_coords  += leg["coords"]
+        total_dist  += leg["distance_m"]
+        total_elev  += leg["elevation_m"]
+
+        # Percorre o segmento pela polyline real do Strava (se disponível)
+        if seg_poly:
+            seg_pts = decode_polyline(str(seg_poly))
+            if seg_pts:
+                all_coords += seg_pts
+                # Ganho real do segmento via SRTM (já calculado)
+                total_elev += seg.get("_srtm_ascent", seg.get("_elev_gain", 0))
+                # Distância do segmento
+                total_dist += seg.get("_dist_km", 0) * 1000
+        else:
+            # Sem polyline: rota ORS direta pelo segmento
+            seg_leg = _ors_leg(seg_start[0], seg_start[1], seg_end[0], seg_end[1], profile, ors_key)
+            if seg_leg and "error" not in seg_leg:
+                all_coords += seg_leg["coords"]
+                total_dist += seg_leg["distance_m"]
+                total_elev += seg_leg["elevation_m"]
+
+        current_lat, current_lng = seg_end[0], seg_end[1]
+
+    # Perna final: último ponto → casa
+    home_leg = _ors_leg(current_lat, current_lng, start_lat, start_lng, profile, ors_key)
+    if home_leg and "error" not in home_leg:
+        all_coords += home_leg["coords"]
+        total_dist += home_leg["distance_m"]
+        total_elev += home_leg["elevation_m"]
+    elif home_leg and "error" in home_leg:
+        return home_leg
+
+    if not all_coords:
+        return {"error": "Nenhuma perna de rota pôde ser calculada."}
+
+    return {
+        "coords":     all_coords,
+        "distance_m": total_dist,
+        "elevation_m": total_elev,
+        "legs":       len(chosen_segments) + 1,
+    }
+
+
 def _ors_smart_round_trip(start_lat, start_lng, target_m, profile, ors_key,
                           segment_midpoints, steepness_level=0):
     """Round-trip inteligente: testa 12 seeds e escolhe a rota que passa
@@ -3101,33 +3209,17 @@ with tab_sugerir:
                         hide_index=True, use_container_width=True,
                     )
 
-                    # ── 4. Round-trip inteligente: 12 seeds → melhor cobertura ──
-                    # Ponto médio de cada segmento usado para pontuar cada seed
-                    _seg_midpoints = [
-                        (
-                            (_sg["_start_ll"][0] + _sg["_end_ll"][0]) / 2,
-                            (_sg["_start_ll"][1] + _sg["_end_ll"][1]) / 2,
-                        )
-                        for _sg in _chosen
-                    ]
-                    # Steepness derivado do ganho alvo (igual à lógica do ORS simples)
-                    _smart_elev_per_10 = _seg_elev / max(_seg_km, 0.1) * 10
-                    if _smart_elev_per_10 < 40:
-                        _smart_steep = 3
-                    elif _smart_elev_per_10 < 100:
-                        _smart_steep = 2
-                    elif _smart_elev_per_10 < 180:
-                        _smart_steep = 1
-                    else:
-                        _smart_steep = 0
+                    # ── 4. Rota em pernas: casa → seg1 → seg2 → ... → casa ──────
+                    # Ordena por distância da largada para criar loop coerente
+                    _chosen_route = sorted(_chosen[:5], key=lambda x: x.get("_dist_from_start_km", 0))
 
-                    with st.spinner("🗺️ Testando 12 traçados e escolhendo o que cobre melhor as subidas..."):
-                        _smart_result = _ors_smart_round_trip(
+                    with st.spinner(
+                        f"🗺️ Construindo rota em {len(_chosen_route)+1} pernas "
+                        f"(casa → segmentos → casa)..."
+                    ):
+                        _smart_result = _build_segment_route(
                             float(_seg_lat), float(_seg_lng),
-                            int(_seg_km * 1000),
-                            _seg_profile, _seg_ors_key,
-                            _seg_midpoints,
-                            steepness_level=_smart_steep,
+                            _chosen_route, _seg_profile, _seg_ors_key,
                         )
 
                     if "error" in _smart_result:
@@ -3143,13 +3235,14 @@ with tab_sugerir:
                             if abs(_sm_elev - _seg_elev) / max(_seg_elev, 1) < 0.35
                             else f"⚠️ {_sm_elev:.0f} m ({_sm_pct}% do alvo)"
                         )
+                        _n_legs = _smart_result.get("legs", len(_chosen_route) + 1)
                         st.success(
                             f"🗺️ Rota gerada: **{_sm_dist:.1f} km** · ⛰️ {_sm_badge} "
-                            f"· seed #{_smart_result.get('seed','?')}"
+                            f"· {_n_legs} pernas"
                         )
                         st.caption(
-                            f"🎯 Seed escolhido por cobrir melhor os "
-                            f"{len(_chosen)} segmento(s) de subida identificados."
+                            f"🎯 Rota passa pelas polylines reais de {len(_chosen_route)} "
+                            f"segmento(s) Strava, conectados por ORS (A→B, free tier)."
                         )
 
                         # Mapa
