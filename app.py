@@ -2442,6 +2442,168 @@ def _score_route_match(route, target_km, elev_per_10km_min, elev_per_10km_max, s
     return round(dist_score * 50 + elev_score * 35 + surf_score * 15, 1)
 
 
+# ── Strava Segments + SRTM helpers ──────────────────────────────────────────
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _strava_segments_explore(token: str, lat: float, lng: float, radius_km: float = 6.0):
+    """Busca segmentos de corrida via Strava Segments Explore API.
+    Retorna lista de segmentos ou dict {"error": "token_invalid"}.
+    """
+    import requests, math
+    d_lat = radius_km / 111.0
+    d_lng = radius_km / (111.0 * math.cos(math.radians(lat)))
+    bounds = f"{lat - d_lat},{lng - d_lng},{lat + d_lat},{lng + d_lng}"
+    try:
+        r = requests.get(
+            "https://www.strava.com/api/v3/segments/explore",
+            headers={"Authorization": f"Bearer {token}"},
+            params={"bounds": bounds, "activity_type": "running"},
+            timeout=12,
+        )
+        if r.status_code == 200:
+            return r.json().get("segments", [])
+        if r.status_code == 401:
+            return {"error": "token_invalid"}
+    except Exception:
+        pass
+    return []
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def _srtm_ascent(encoded_polyline: str) -> float:
+    """Calcula ganho de elevação real de um segmento usando dados SRTM (NASA).
+    Amostra até 40 pontos da polyline para reduzir chamadas à API local.
+    """
+    try:
+        import srtm
+        pts = decode_polyline(encoded_polyline)
+        if not pts or len(pts) < 2:
+            return 0.0
+        step = max(1, len(pts) // 40)
+        sampled = pts[::step]
+        elev_data = srtm.get_data()
+        elevs = [elev_data.get_elevation(la, ln) for la, ln in sampled]
+        elevs = [e for e in elevs if e is not None]
+        if len(elevs) < 2:
+            return 0.0
+        ascent = sum(max(0.0, elevs[i] - elevs[i - 1]) for i in range(1, len(elevs)))
+        return round(ascent, 1)
+    except Exception:
+        return 0.0
+
+
+def _select_segments_for_route(
+    segments: list,
+    start_lat: float,
+    start_lng: float,
+    target_elev_m: float,
+    target_km: float,
+    surface_pref: str = "Tanto faz",
+) -> list:
+    """Seleção greedy de segmentos para atingir o ganho de elevação alvo.
+
+    Ordena candidatos por (ganho de elevação / distância do ponto de largada)
+    e acumula até alcançar target_elev_m sem explodir target_km*1.6.
+    """
+    import math
+
+    def _haversine(la1, ln1, la2, ln2):
+        R = 6371.0
+        dlat = math.radians(la2 - la1)
+        dlng = math.radians(ln2 - ln1)
+        a = math.sin(dlat / 2) ** 2 + math.cos(math.radians(la1)) * math.cos(math.radians(la2)) * math.sin(dlng / 2) ** 2
+        return R * 2 * math.asin(math.sqrt(a))
+
+    candidates = []
+    for s in segments:
+        grade    = s.get("avg_grade", 0)
+        elev_diff = s.get("elev_difference", 0)
+        dist_m   = s.get("distance", 0)
+        sll      = s.get("start_latlng") or [start_lat, start_lng]
+        ell      = s.get("end_latlng")   or [start_lat, start_lng]
+
+        if grade <= 0 or elev_diff <= 0 or dist_m < 50:
+            continue
+
+        d_from_start = _haversine(start_lat, start_lng, sll[0], sll[1])
+
+        # filtro superfície (aproximado pelo nome: contém "trilha/trail/morro/serra")
+        is_trail_seg = any(kw in s.get("name", "").lower()
+                           for kw in ("trilha", "trail", "morro", "pico", "serra", "monte", "subida"))
+        if surface_pref == "Trilha" and not is_trail_seg:
+            continue
+        if surface_pref == "Asfalto" and is_trail_seg:
+            continue
+
+        candidates.append({
+            **s,
+            "_dist_from_start_km": d_from_start,
+            "_elev_gain":          float(elev_diff),
+            "_dist_km":            dist_m / 1000.0,
+            "_start_ll":           sll,
+            "_end_ll":             ell,
+            "_is_trail":           is_trail_seg,
+        })
+
+    if not candidates:
+        return []
+
+    # score: ganho por km de deslocamento até o segmento (favorece subidas próximas)
+    candidates.sort(
+        key=lambda x: x["_elev_gain"] / max(x["_dist_from_start_km"], 0.2),
+        reverse=True,
+    )
+
+    selected, acc_elev, acc_km = [], 0.0, 0.0
+    for seg in candidates:
+        if acc_elev >= target_elev_m:
+            break
+        if acc_km + seg["_dist_km"] > target_km * 1.6:
+            continue
+        selected.append(seg)
+        acc_elev += seg["_elev_gain"]
+        acc_km   += seg["_dist_km"]
+
+    return selected
+
+
+def _ors_via_waypoints(start_lat, start_lng, waypoints, profile, ors_key):
+    """Gera rota ORS ponto-a-ponto passando pelos waypoints (start→wp1→wp2→...→start).
+
+    waypoints: lista de (lat, lng)
+    Retorna {"coords": [...], "distance_m": float, "elevation_m": float} ou None.
+    """
+    import requests
+    url = f"https://api.openrouteservice.org/v2/directions/{profile}/geojson"
+
+    coords = [[start_lng, start_lat]]
+    for wp_lat, wp_lng in waypoints:
+        coords.append([wp_lng, wp_lat])
+    coords.append([start_lng, start_lat])   # fecha o loop
+
+    if len(coords) < 3:
+        return None
+
+    body = {"coordinates": coords, "elevation": True}
+    try:
+        r = requests.post(
+            url,
+            json=body,
+            headers={"Authorization": ors_key, "Content-Type": "application/json"},
+            timeout=20,
+        )
+        if r.status_code == 200:
+            feat   = r.json()["features"][0]
+            props  = feat["properties"]
+            route_coords = [(c[1], c[0]) for c in feat["geometry"]["coordinates"]]
+            ascent = props.get("ascent") or props.get("summary", {}).get("ascent", 0) or 0
+            dist   = props.get("summary", {}).get("distance", 0)
+            return {"coords": route_coords, "distance_m": dist, "elevation_m": float(ascent)}
+    except Exception:
+        pass
+    return None
+
+
 def _ors_single(lat, lng, target_m, profile, seed, ors_key, steepness_level):
     """Uma única chamada ORS round_trip com elevation=True."""
     import requests
@@ -2693,22 +2855,240 @@ with tab_sugerir:
                         unsafe_allow_html=True,
                     )
 
+    # ── Rota Inteligente: Segmentos Strava + SRTM + ORS ─────────────────────
+    st.markdown("---")
+    st.subheader("🎯 Rota Inteligente  (Segmentos reais + Elevação SRTM + Traçado ORS)")
+    st.caption(
+        "Busca segmentos de subida que corredores locais já usam via Strava, "
+        "confirma o ganho real de cada um com dados de altitude NASA (SRTM) "
+        "e pede ao ORS que conecte tudo em um circuito fechado saindo da sua largada."
+    )
+
+    with st.expander("ℹ️ Como obter o Strava Access Token?"):
+        st.markdown(
+            "**Passo a passo rápido (token pessoal — 6 horas de validade):**\n\n"
+            "1. Acesse [strava.com/settings/api](https://www.strava.com/settings/api) "
+            "e crie um app (nome livre, callback URL pode ser `http://localhost`)\n\n"
+            "2. Abra no navegador (troque `CLIENT_ID` pelo seu ID de app):\n"
+            "```\nhttps://www.strava.com/oauth/authorize"
+            "?client_id=CLIENT_ID&response_type=code"
+            "&redirect_uri=http://localhost&approval_prompt=force"
+            "&scope=read,activity:read\n```\n\n"
+            "3. Autorize e copie o `code=...` da URL de redirecionamento\n\n"
+            "4. No terminal (substitua os valores):\n"
+            "```bash\ncurl -X POST https://www.strava.com/oauth/token"
+            " -d client_id=SEU_ID -d client_secret=SEU_SECRET"
+            " -d code=O_CODE -d grant_type=authorization_code\n```\n\n"
+            "5. No JSON de resposta, copie `access_token` e cole abaixo."
+        )
+
+    _seg_c1, _seg_c2 = st.columns([2, 1])
+    with _seg_c1:
+        _strava_token = st.text_input(
+            "🔑 Strava Access Token",
+            type="password",
+            placeholder="a1b2c3d4e5f6...",
+            key="sug_strava_token",
+        )
+    with _seg_c2:
+        _seg_ors_key = st.text_input(
+            "🔑 API Key ORS (para traçar a rota)",
+            type="password",
+            placeholder="ey...",
+            key="sug_smart_ors_key",
+        )
+
+    if _strava_token and _seg_ors_key:
+        _sc1, _sc2, _sc3 = st.columns(3)
+        with _sc1:
+            _seg_lat = st.number_input(
+                "Latitude largada", value=_default_lat,
+                format="%.5f", key="sug_seg_lat"
+            )
+            _seg_lng = st.number_input(
+                "Longitude largada", value=_default_lng,
+                format="%.5f", key="sug_seg_lng"
+            )
+        with _sc2:
+            _seg_km      = st.slider("Distância alvo (km)", 3.0, 60.0, float(sug_km), 0.5, key="sug_seg_km")
+            _seg_elev    = st.slider("⛰️ Ganho de elevação alvo (m)", 0, 2000,
+                                      min(400, int(sug_km * 30)), 25, key="sug_seg_elev")
+            _seg_radius  = st.slider("Raio de busca de segmentos (km)", 2, 15, 6, 1, key="sug_seg_radius")
+        with _sc3:
+            _seg_profile = st.selectbox(
+                "Perfil ORS", ["foot-hiking", "foot-walking"], key="sug_seg_profile"
+            )
+            _seg_surf = st.selectbox(
+                "Superfície preferida",
+                ["Tanto faz", "Asfalto / Estradão", "Trilha"],
+                key="sug_seg_surf",
+            )
+            _seg_surf_pref = (
+                "Trilha"  if _seg_surf == "Trilha"
+                else "Asfalto" if "Asfalto" in _seg_surf
+                else "Tanto faz"
+            )
+            _seg_go = st.button(
+                "🔍 Buscar e gerar rota inteligente",
+                key="sug_seg_go", use_container_width=True,
+            )
+
+        if _seg_go:
+            # ── 1. Buscar segmentos ──────────────────────────────────────
+            with st.spinner(f"🔍 Buscando segmentos num raio de {_seg_radius} km..."):
+                _raw_segs = _strava_segments_explore(
+                    _strava_token, float(_seg_lat), float(_seg_lng), float(_seg_radius)
+                )
+
+            if isinstance(_raw_segs, dict) and _raw_segs.get("error") == "token_invalid":
+                st.error("❌ Token Strava inválido ou expirado. Gere um novo access token.")
+            elif not _raw_segs:
+                st.warning("Nenhum segmento encontrado nessa região. Tente aumentar o raio de busca.")
+            else:
+                st.success(f"✅ {len(_raw_segs)} segmentos encontrados na região.")
+
+                # ── 2. Enriquecer com SRTM ──────────────────────────────
+                with st.spinner("🛰️ Confirmando elevação real via dados SRTM (NASA)..."):
+                    for _sg in _raw_segs:
+                        _poly = _sg.get("points", "")
+                        if _poly:
+                            _sg["_srtm_ascent"] = _srtm_ascent(_poly)
+                        else:
+                            _sg["_srtm_ascent"] = float(_sg.get("elev_difference", 0))
+
+                # ── 3. Selecionar segmentos ──────────────────────────────
+                _chosen = _select_segments_for_route(
+                    _raw_segs, float(_seg_lat), float(_seg_lng),
+                    float(_seg_elev), float(_seg_km), _seg_surf_pref,
+                )
+
+                if not _chosen:
+                    st.warning(
+                        "Não foi possível selecionar segmentos com subida suficiente nessa área. "
+                        "Tente aumentar o raio de busca ou reduzir o ganho alvo."
+                    )
+                else:
+                    _total_seg_elev = sum(s["_elev_gain"] for s in _chosen)
+                    st.info(
+                        f"📐 {len(_chosen)} segmento(s) selecionado(s) · "
+                        f"Ganho acumulado pelos segmentos: **{_total_seg_elev:.0f} m**"
+                    )
+
+                    # Tabela de segmentos escolhidos
+                    _seg_rows = []
+                    for _sg in _chosen:
+                        _seg_rows.append({
+                            "Segmento": _sg.get("name", "—")[:40],
+                            "Dist (m)": f"{_sg.get('distance', 0):.0f}",
+                            "Incl. (%)": f"{_sg.get('avg_grade', 0):.1f}",
+                            "Ganho Strava (m)": f"{_sg.get('elev_difference', 0):.0f}",
+                            "Ganho SRTM (m)": f"{_sg.get('_srtm_ascent', 0):.0f}",
+                            "Dist. largada (km)": f"{_sg['_dist_from_start_km']:.1f}",
+                        })
+                    st.dataframe(
+                        pd.DataFrame(_seg_rows),
+                        hide_index=True, use_container_width=True,
+                    )
+
+                    # ── 4. Rota ORS passando pelos segmentos ─────────────
+                    _waypoints = []
+                    for _sg in _chosen:
+                        _waypoints.append((_sg["_start_ll"][0], _sg["_start_ll"][1]))
+                        _waypoints.append((_sg["_end_ll"][0],   _sg["_end_ll"][1]))
+
+                    with st.spinner("🗺️ Traçando circuito via ORS..."):
+                        _smart_result = _ors_via_waypoints(
+                            float(_seg_lat), float(_seg_lng),
+                            _waypoints, _seg_profile, _seg_ors_key,
+                        )
+
+                    if _smart_result is None:
+                        st.error(
+                            "ORS não conseguiu conectar os waypoints. "
+                            "Verifique a chave ORS ou tente reduzir o raio de busca."
+                        )
+                    else:
+                        _sm_dist = _smart_result["distance_m"] / 1000
+                        _sm_elev = _smart_result["elevation_m"]
+                        _sm_pct  = int(_sm_elev / max(_seg_elev, 1) * 100)
+                        _sm_badge = (
+                            f"✅ {_sm_elev:.0f} m ({_sm_pct}% do alvo)"
+                            if abs(_sm_elev - _seg_elev) / max(_seg_elev, 1) < 0.35
+                            else f"⚠️ {_sm_elev:.0f} m ({_sm_pct}% do alvo)"
+                        )
+                        st.success(f"🗺️ Rota gerada: **{_sm_dist:.1f} km** · ⛰️ {_sm_badge}")
+
+                        # Mapa
+                        _sm_pts = _smart_result["coords"]
+                        _sm_map = folium.Map(
+                            location=_sm_pts[0], zoom_start=14,
+                            tiles=None, control_scale=True,
+                        )
+                        folium.TileLayer(
+                            "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+                            attr="CartoDB", name="Dark", max_zoom=19,
+                        ).add_to(_sm_map)
+                        folium.PolyLine(
+                            _sm_pts, color="#2ecc71", weight=4.5, opacity=0.9,
+                        ).add_to(_sm_map)
+                        folium.CircleMarker(
+                            _sm_pts[0], radius=10, color="#f1c40f",
+                            fill=True, fill_color="#f1c40f", fill_opacity=1.0,
+                            tooltip="Largada / Chegada",
+                        ).add_to(_sm_map)
+                        for _i, _sg in enumerate(_chosen):
+                            folium.CircleMarker(
+                                [_sg["_start_ll"][0], _sg["_start_ll"][1]], radius=7,
+                                color="#e74c3c", fill=True, fill_color="#e74c3c", fill_opacity=0.85,
+                                tooltip=f"Subida: {_sg.get('name','Seg '+str(_i+1))[:35]} +{_sg['_elev_gain']:.0f}m",
+                            ).add_to(_sm_map)
+                            folium.CircleMarker(
+                                [_sg["_end_ll"][0], _sg["_end_ll"][1]], radius=5,
+                                color="#e67e22", fill=True, fill_color="#e67e22", fill_opacity=0.7,
+                                tooltip=f"Topo — {_sg.get('name','Seg '+str(_i+1))[:35]}",
+                            ).add_to(_sm_map)
+                        _sm_map.fit_bounds([
+                            [min(p[0] for p in _sm_pts) - 0.005, min(p[1] for p in _sm_pts) - 0.005],
+                            [max(p[0] for p in _sm_pts) + 0.005, max(p[1] for p in _sm_pts) + 0.005],
+                        ])
+                        components.html(_sm_map._repr_html_(), height=480)
+
+                        # Download GPX
+                        _gpx_sm = [
+                            '<?xml version="1.0" encoding="UTF-8"?>',
+                            '<gpx version="1.1" creator="PerformanceRun — Rota Inteligente">',
+                            '  <trk><name>Rota Inteligente</name><trkseg>',
+                        ]
+                        for _p in _sm_pts:
+                            _gpx_sm.append(f'    <trkpt lat="{_p[0]:.6f}" lon="{_p[1]:.6f}"/>')
+                        _gpx_sm += ["  </trkseg></trk>", "</gpx>"]
+                        st.download_button(
+                            "⬇️ Baixar GPX — Rota Inteligente",
+                            data="\n".join(_gpx_sm),
+                            file_name="rota_inteligente.gpx",
+                            mime="application/gpx+xml",
+                            key="sug_smart_gpx",
+                        )
+    else:
+        st.caption(
+            "💡 Informe o Strava Access Token e a chave ORS para gerar "
+            "rotas inteligentes com segmentos reais da sua região."
+        )
+
     # ── Rotas Novas via ORS ──────────────────────────────────────────────────
     st.markdown("---")
     st.subheader("🆕 Gerar rota nova")
 
     with st.expander("ℹ️ Como funciona?"):
-        st.markdown("""
-**OpenRouteService (ORS)** é uma API gratuita baseada em OpenStreetMap que gera
-circuitos a partir de um ponto de partida, respeitando distância e perfil de terreno.
-
-Para usar:
-1. Cadastre-se gratuitamente em **[openrouteservice.org](https://openrouteservice.org/dev/#/signup)**
-2. Copie sua API Key no painel
-3. Cole abaixo
-
-O plano gratuito oferece 2.000 requisições/dia — mais do que suficiente para uso pessoal.
-""")
+        st.markdown(
+            "**OpenRouteService (ORS)** é uma API gratuita baseada em OpenStreetMap que gera "
+            "circuitos a partir de um ponto de partida, respeitando distância e perfil de terreno.\n\n"
+            "Para usar:\n"
+            "1. Cadastre-se gratuitamente em **[openrouteservice.org](https://openrouteservice.org/dev/#/signup)**\n"
+            "2. Copie sua API Key no painel\n"
+            "3. Cole abaixo\n\n"
+            "O plano gratuito oferece 2.000 requisições/dia — mais do que suficiente para uso pessoal."
+        )
 
     _ors_col1, _ors_col2 = st.columns([2, 1])
     with _ors_col1:
@@ -2721,58 +3101,47 @@ O plano gratuito oferece 2.000 requisições/dia — mais do que suficiente para
     with _ors_col2:
         ors_profile = st.selectbox(
             "Perfil", ["foot-hiking", "foot-walking"], key="sug_ors_profile",
-            help="foot-hiking prioriza trilhas e terrenos naturais"
+            help="foot-hiking para trilhas e terrenos irregulares"
         )
 
     if ors_key:
-        # Ponto de largada: centro do cluster mais frequente do histórico
-        if _route_clusters:
-            _most_freq = max(_route_clusters, key=lambda r: r["n_runs"])
-            _default_lat = _most_freq["clat"]
-            _default_lng = _most_freq["clng"]
-        else:
-            _default_lat, _default_lng = -27.5954, -48.5480  # Florianópolis
-
+        _default_lat2 = _default_lat
+        _default_lng2 = _default_lng
         _ors_c1, _ors_c2, _ors_c3 = st.columns(3)
         with _ors_c1:
-            ors_lat = st.number_input("Latitude largada", value=_default_lat,
+            ors_lat = st.number_input("Latitude largada", value=_default_lat2,
                                        format="%.5f", key="sug_ors_lat")
-            ors_lng = st.number_input("Longitude largada", value=_default_lng,
+            ors_lng = st.number_input("Longitude largada", value=_default_lng2,
                                        format="%.5f", key="sug_ors_lng")
         with _ors_c2:
             ors_km   = st.slider("Distância (km)", 3.0, 60.0, float(sug_km), 0.5,
                                   key="sug_ors_km")
             ors_elev = st.slider(
-                "⛰️ Ganho de elevação alvo (m)", 0, 2000,
-                value=min(200, int(_runs_sug["elevation_gain"].median())
-                          if not _runs_sug.empty and _runs_sug["elevation_gain"].notna().any()
-                          else 200),
+                "⛰️ Ganho de elevação alvo (m)",
+                0, 2000,
+                min(400, int(sug_km * 30)),
                 step=25, key="sug_ors_elev",
-                help="Ganho total desejado. O ORS vai tentar encontrar um traçado com esse perfil de subida.",
             )
-            # Deriva steepness do ORS a partir de m/10km
             _ors_elev_per_10 = ors_elev / max(ors_km, 0.1) * 10
             if _ors_elev_per_10 < 40:
-                _ors_steepness = 3   # plano: evita subidas
+                _ors_steepness = 3
                 _ors_perfil_lbl = "🛣️ Plano"
             elif _ors_elev_per_10 < 100:
-                _ors_steepness = 2   # leve
+                _ors_steepness = 2
                 _ors_perfil_lbl = "〰️ Levemente ondulado"
             elif _ors_elev_per_10 < 180:
-                _ors_steepness = 1   # ondulado
+                _ors_steepness = 1
                 _ors_perfil_lbl = "🌊 Ondulado"
             else:
-                _ors_steepness = 0   # montanhoso: busca subidas
+                _ors_steepness = 0
                 _ors_perfil_lbl = "⛰️ Montanhoso"
             st.caption(f"Perfil derivado: **{_ors_perfil_lbl}** ({_ors_elev_per_10:.0f} m/10km)")
-            # seed slider removed — now auto-tries 6 seeds and picks best
+
         with _ors_c3:
-            st.markdown("<br>", unsafe_allow_html=True)
             ors_go = st.button("🗺️ Gerar rota", key="sug_ors_go", use_container_width=True)
 
         if ors_go:
-            # Gera 6 traçados e escolhe o melhor para o perfil pedido
-            _seeds_to_try = list(range(1, 7)) + [int(ors_elev)]  # último = target_elev_m
+            _seeds_to_try = list(range(1, 7)) + [int(ors_elev)]
             with st.spinner(f"Testando 6 traçados e escolhendo o melhor para {ors_elev} m de ganho..."):
                 _ors_result = _ors_round_trip(
                     float(ors_lat), float(ors_lng),
@@ -2783,7 +3152,7 @@ O plano gratuito oferece 2.000 requisições/dia — mais do que suficiente para
                     steepness_level=_ors_steepness,
                 )
             if _ors_result is None:
-                st.error("❌ Não foi possível gerar a rota. Verifique a API Key e tente novamente.")
+                st.error("Não foi possível gerar a rota. Verifique sua API Key e tente novamente.")
             else:
                 _ors_dist = _ors_result["distance_m"] / 1000
                 _ors_elev_real = _ors_result["elevation_m"]
