@@ -5,3 +5,5 @@ statsmodels>=0.14.0
 streamlit-folium
 folium
 pydeck
+srtm.py
+requests
