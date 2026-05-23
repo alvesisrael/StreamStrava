@@ -2567,53 +2567,92 @@ def _select_segments_for_route(
     return selected
 
 
-def _ors_via_waypoints(start_lat, start_lng, waypoints, profile, ors_key):
-    """Gera rota ORS ponto-a-ponto passando pelos waypoints (start→wp1→wp2→...→start).
+def _ors_smart_round_trip(start_lat, start_lng, target_m, profile, ors_key,
+                          segment_midpoints, steepness_level=0):
+    """Round-trip inteligente: testa 12 seeds e escolhe a rota que passa
+    mais perto dos segmentos de subida identificados pelo Strava.
 
-    waypoints: lista de (lat, lng)
-    Retorna {"coords": [...], "distance_m": float, "elevation_m": float}
-         ou {"error": "<mensagem legível>"} em caso de falha.
+    Usa apenas 1 coordenada + round_trip option (compatível com free tier ORS).
+    segment_midpoints: lista de (lat, lng) — pontos médios dos segmentos escolhidos.
+    Retorna {"coords": [...], "distance_m": float, "elevation_m": float,
+             "seed": int, "coverage_score": float}
+         ou {"error": "<mensagem>"} em caso de falha total.
     """
-    import requests
-    url = f"https://api.openrouteservice.org/v2/directions/{profile}/geojson"
+    import requests, math
 
-    # ORS free tier aceita até 50 waypoints; limitamos a 20 para segurança
-    capped = waypoints[:20]
+    def _min_dist_to_route(route_pts, target_lat, target_lng):
+        """Distância mínima (graus²) de um ponto à polyline da rota."""
+        best = float("inf")
+        for r_lat, r_lng in route_pts:
+            d = (r_lat - target_lat) ** 2 + (r_lng - target_lng) ** 2
+            if d < best:
+                best = d
+        return best
 
-    coords = [[start_lng, start_lat]]
-    for wp_lat, wp_lng in capped:
-        coords.append([wp_lng, wp_lat])
-    coords.append([start_lng, start_lat])   # fecha o loop
+    url  = f"https://api.openrouteservice.org/v2/directions/{profile}/geojson"
+    results = []
 
-    if len(coords) < 3:
-        return {"error": "Nenhum waypoint disponível para traçar a rota."}
-
-    body = {"coordinates": coords, "elevation": True}
-    try:
-        r = requests.post(
-            url,
-            json=body,
-            headers={"Authorization": ors_key, "Content-Type": "application/json"},
-            timeout=20,
-        )
-        if r.status_code == 200:
+    for seed in range(1, 13):   # 12 seeds
+        body = {
+            "coordinates": [[start_lng, start_lat]],
+            "elevation": True,
+            "options": {
+                "round_trip": {"length": target_m, "points": 5, "seed": seed}
+            },
+        }
+        if steepness_level > 0:
+            body["options"]["profile_params"] = {
+                "weightings": {"steepness_difficulty": {"level": steepness_level}}
+            }
+        try:
+            r = requests.post(
+                url, json=body,
+                headers={"Authorization": ors_key, "Content-Type": "application/json"},
+                timeout=12,
+            )
+            if r.status_code != 200:
+                try:
+                    err_body = r.json()
+                    err_msg  = err_body.get("error", {})
+                    if isinstance(err_msg, dict):
+                        err_msg = err_msg.get("message", str(r.status_code))
+                except Exception:
+                    err_msg = str(r.status_code)
+                # Se der 403/401 não adianta tentar mais seeds
+                if r.status_code in (401, 403):
+                    return {"error": f"ORS {r.status_code}: {err_msg}"}
+                continue
             feat   = r.json()["features"][0]
             props  = feat["properties"]
-            route_coords = [(c[1], c[0]) for c in feat["geometry"]["coordinates"]]
+            coords = [(c[1], c[0]) for c in feat["geometry"]["coordinates"]]
             ascent = props.get("ascent") or props.get("summary", {}).get("ascent", 0) or 0
             dist   = props.get("summary", {}).get("distance", 0)
-            return {"coords": route_coords, "distance_m": dist, "elevation_m": float(ascent)}
-        # Devolve a mensagem de erro da API para o UI poder exibir
-        try:
-            err_body = r.json()
-            err_msg  = err_body.get("error", {})
-            if isinstance(err_msg, dict):
-                err_msg = err_msg.get("message", str(err_body))
+
+            # Score: soma das distâncias mínimas a cada segmento (menor = melhor)
+            if segment_midpoints:
+                coverage = sum(
+                    _min_dist_to_route(coords, slat, slng)
+                    for slat, slng in segment_midpoints
+                )
+            else:
+                coverage = 0.0
+
+            results.append({
+                "coords":         coords,
+                "distance_m":     dist,
+                "elevation_m":    float(ascent),
+                "seed":           seed,
+                "coverage_score": coverage,
+            })
         except Exception:
-            err_msg = f"HTTP {r.status_code}"
-        return {"error": f"ORS {r.status_code}: {err_msg}"}
-    except Exception as exc:
-        return {"error": f"Erro de conexão: {exc}"}
+            continue
+
+    if not results:
+        return {"error": "Nenhum traçado retornado pela ORS. Verifique a chave e tente novamente."}
+
+    # Escolhe a rota que passa mais perto dos segmentos de subida
+    best = min(results, key=lambda x: x["coverage_score"])
+    return best
 
 
 def _ors_single(lat, lng, target_m, profile, seed, ors_key, steepness_level):
@@ -3011,26 +3050,39 @@ with tab_sugerir:
                         hide_index=True, use_container_width=True,
                     )
 
-                    # ── 4. Rota ORS passando pelos segmentos ─────────────
-                    _waypoints = []
-                    for _sg in _chosen:
-                        _waypoints.append((_sg["_start_ll"][0], _sg["_start_ll"][1]))
-                        _waypoints.append((_sg["_end_ll"][0],   _sg["_end_ll"][1]))
+                    # ── 4. Round-trip inteligente: 12 seeds → melhor cobertura ──
+                    # Ponto médio de cada segmento usado para pontuar cada seed
+                    _seg_midpoints = [
+                        (
+                            (_sg["_start_ll"][0] + _sg["_end_ll"][0]) / 2,
+                            (_sg["_start_ll"][1] + _sg["_end_ll"][1]) / 2,
+                        )
+                        for _sg in _chosen
+                    ]
+                    # Steepness derivado do ganho alvo (igual à lógica do ORS simples)
+                    _smart_elev_per_10 = _seg_elev / max(_seg_km, 0.1) * 10
+                    if _smart_elev_per_10 < 40:
+                        _smart_steep = 3
+                    elif _smart_elev_per_10 < 100:
+                        _smart_steep = 2
+                    elif _smart_elev_per_10 < 180:
+                        _smart_steep = 1
+                    else:
+                        _smart_steep = 0
 
-                    with st.spinner("🗺️ Traçando circuito via ORS..."):
-                        _smart_result = _ors_via_waypoints(
+                    with st.spinner("🗺️ Testando 12 traçados e escolhendo o que cobre melhor as subidas..."):
+                        _smart_result = _ors_smart_round_trip(
                             float(_seg_lat), float(_seg_lng),
-                            _waypoints, _seg_profile, _seg_ors_key,
+                            int(_seg_km * 1000),
+                            _seg_profile, _seg_ors_key,
+                            _seg_midpoints,
+                            steepness_level=_smart_steep,
                         )
 
-                    if _smart_result is None or "error" in _smart_result:
-                        _err_detail = (_smart_result or {}).get("error", "resposta vazia")
-                        st.error(f"❌ ORS não conseguiu traçar a rota: **{_err_detail}**")
-                        st.caption(
-                            f"Waypoints enviados: {len(_waypoints)} ponto(s). "
-                            "Dicas: reduza o raio de busca, diminua o ganho alvo, "
-                            "ou verifique se a chave ORS tem saldo disponível."
-                        )
+                    if "error" in _smart_result:
+                        _err_detail = _smart_result["error"]
+                        st.error(f"❌ ORS: **{_err_detail}**")
+                        st.caption("Verifique se a chave ORS tem saldo disponível.")
                     else:
                         _sm_dist = _smart_result["distance_m"] / 1000
                         _sm_elev = _smart_result["elevation_m"]
@@ -3040,7 +3092,14 @@ with tab_sugerir:
                             if abs(_sm_elev - _seg_elev) / max(_seg_elev, 1) < 0.35
                             else f"⚠️ {_sm_elev:.0f} m ({_sm_pct}% do alvo)"
                         )
-                        st.success(f"🗺️ Rota gerada: **{_sm_dist:.1f} km** · ⛰️ {_sm_badge}")
+                        st.success(
+                            f"🗺️ Rota gerada: **{_sm_dist:.1f} km** · ⛰️ {_sm_badge} "
+                            f"· seed #{_smart_result.get('seed','?')}"
+                        )
+                        st.caption(
+                            f"🎯 Seed escolhido por cobrir melhor os "
+                            f"{len(_chosen)} segmento(s) de subida identificados."
+                        )
 
                         # Mapa
                         _sm_pts = _smart_result["coords"]
