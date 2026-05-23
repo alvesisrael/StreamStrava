@@ -2445,25 +2445,32 @@ def _score_route_match(route, target_km, elev_per_10km_min, elev_per_10km_max, s
 
 # ── Overpass + SRTM + ORS: Rota Inteligente ─────────────────────────────
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def _overpass_fetch_ways(lat: float, lng: float, radius_m: int) -> list:
-    """Busca via Overpass API todos os caminhos caminhaveis num raio dado."""
+def _overpass_fetch_ways(lat: float, lng: float, radius_m: int):
+    """Busca caminhos caminhaveis via Overpass; tenta 3 endpoints. Retorna (list, str_diag)."""
     import requests
     query = (
-        "[out:json][timeout:30];"
+        "[out:json][timeout:45];"
         "(way[\"highway\"~\"^(path|track|footway|bridleway|steps|pedestrian"
         "|living_street|residential|unclassified|tertiary|service)$\"]"
         f"(around:{radius_m},{lat},{lng}););"
         "out body geom;"
     )
-    try:
-        r = requests.post("https://overpass-api.de/api/interpreter",
-                          data={"data": query}, timeout=35)
-        if r.status_code == 200:
-            return r.json().get("elements", [])
-    except Exception:
-        pass
-    return []
+    endpoints = [
+        "https://overpass-api.de/api/interpreter",
+        "https://overpass.kumi.systems/api/interpreter",
+        "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+    ]
+    last_err = ""
+    for ep in endpoints:
+        try:
+            r = requests.post(ep, data={"data": query}, timeout=50)
+            if r.status_code == 200:
+                els = r.json().get("elements", [])
+                return els, f"{len(els)} vias encontradas ({ep.split('/')[2]})"
+            last_err = f"HTTP {r.status_code} em {ep}"
+        except Exception as exc:
+            last_err = f"Erro em {ep}: {exc}"
+    return [], last_err
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
@@ -2593,9 +2600,9 @@ def _build_route_overpass_srtm(start_lat, start_lng, target_km, target_elev_m,
     """Constroi rota: Overpass (caminhos OSM) -> SRTM (elevacao) -> ORS (conexao A-B)."""
     import json
     radius_m = int(target_km / 4.0 * 1000)
-    ways_raw = _overpass_fetch_ways(start_lat, start_lng, radius_m)
+    ways_raw, diag = _overpass_fetch_ways(start_lat, start_lng, radius_m)
     if not ways_raw:
-        return {"error": f"Overpass nao encontrou caminhos num raio de {radius_m // 1000:.1f} km."}
+        return {"error": f"Overpass nao encontrou caminhos num raio de {radius_m / 1000:.1f} km. Detalhe: {diag}"}
     ways_elev = _ways_with_elevation(json.dumps(ways_raw))
     if not ways_elev:
         return {"error": "Nao foi possivel calcular elevacao SRTM para os caminhos encontrados."}
