@@ -2855,6 +2855,15 @@ with tab_sugerir:
                         unsafe_allow_html=True,
                     )
 
+    # Lat/lng padrão: mediana das corridas com GPS (fallback: centro de Florianópolis)
+    _has_gps = (
+        not _runs_sug.empty
+        and "latitude" in _runs_sug.columns
+        and _runs_sug["latitude"].notna().any()
+    )
+    _default_lat = float(_runs_sug["latitude"].dropna().median())  if _has_gps else -27.5954
+    _default_lng = float(_runs_sug["longitude"].dropna().median()) if _has_gps else -48.5480
+
     # ── Rota Inteligente: Segmentos Strava + SRTM + ORS ─────────────────────
     st.markdown("---")
     st.subheader("🎯 Rota Inteligente  (Segmentos reais + Elevação SRTM + Traçado ORS)")
@@ -3105,13 +3114,11 @@ with tab_sugerir:
         )
 
     if ors_key:
-        _default_lat2 = _default_lat
-        _default_lng2 = _default_lng
         _ors_c1, _ors_c2, _ors_c3 = st.columns(3)
         with _ors_c1:
-            ors_lat = st.number_input("Latitude largada", value=_default_lat2,
+            ors_lat = st.number_input("Latitude largada", value=_default_lat,
                                        format="%.5f", key="sug_ors_lat")
-            ors_lng = st.number_input("Longitude largada", value=_default_lng2,
+            ors_lng = st.number_input("Longitude largada", value=_default_lng,
                                        format="%.5f", key="sug_ors_lng")
         with _ors_c2:
             ors_km   = st.slider("Distância (km)", 3.0, 60.0, float(sug_km), 0.5,
