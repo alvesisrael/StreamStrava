@@ -2591,6 +2591,108 @@ def _select_segments_for_route(
     return selected
 
 
+@st.cache_data(ttl=86400, show_spinner=False)
+def _srtm_find_best_target(start_lat: float, start_lng: float,
+                            max_radius_km: float = 8.0):
+    """Escaneia 16 direções × 7 distâncias via SRTM para achar o ponto
+    de maior altitude acessível a partir da largada.
+
+    Retorna {"lat", "lng", "ele", "dist_km", "direction_deg"} ou None.
+    """
+    import srtm, math
+    elev_data  = srtm.get_data()
+    home_ele   = elev_data.get_elevation(start_lat, start_lng) or 0
+    best       = None
+
+    for angle_deg in range(0, 360, 22):          # 16 direções
+        angle_rad = math.radians(angle_deg)
+        for dist_km in [1.5, 2.5, 3.5, 4.5, 6.0, max_radius_km]:
+            dlat = dist_km / 111.0 * math.cos(angle_rad)
+            dlon = dist_km / (111.0 * math.cos(math.radians(start_lat))) * math.sin(angle_rad)
+            tgt_lat = start_lat + dlat
+            tgt_lon = start_lng + dlon
+            ele = elev_data.get_elevation(tgt_lat, tgt_lon)
+            if ele is None:
+                continue
+            gain = ele - home_ele
+            if gain > 0 and (best is None or ele > best["ele"]):
+                best = {
+                    "lat":          tgt_lat,
+                    "lng":          tgt_lon,
+                    "ele":          ele,
+                    "gain":         gain,
+                    "dist_km":      dist_km,
+                    "direction_deg": angle_deg,
+                }
+
+    # Só retorna se encontrou algo pelo menos 50m acima da largada
+    return best if (best and best["gain"] >= 50) else None
+
+
+def _build_mountain_route(start_lat, start_lng, target_km, profile, ors_key,
+                           mountain_target=None):
+    """Rota em 3 pernas:
+        1. Casa → pico SRTM         (ORS A→B)
+        2. Loop na área de altitude  (ORS round_trip)
+        3. Pico → Casa              (ORS A→B)
+
+    Cada chamada ORS usa no máximo 2 pontos (free tier compatível).
+    mountain_target: dict de _srtm_find_best_target (opcional; se None, detecta automaticamente).
+    Retorna {"coords", "distance_m", "elevation_m", "mountain_target"} ou {"error": ...}.
+    """
+    import math
+
+    if mountain_target is None:
+        mountain_target = _srtm_find_best_target(start_lat, start_lng)
+    if mountain_target is None:
+        return {"error": "Nenhuma área montanhosa encontrada num raio de 8 km. "
+                         "Tente um ponto de partida mais perto das serras."}
+
+    mt_lat = mountain_target["lat"]
+    mt_lng = mountain_target["lng"]
+    leg_km = mountain_target["dist_km"]
+
+    # Distância restante para o loop no topo (mínimo 2 km)
+    loop_km = max(2.0, target_km - 2.0 * leg_km)
+
+    # ── Perna 1: casa → montanha ────────────────────────────────────────
+    leg1 = _ors_leg(start_lat, start_lng, mt_lat, mt_lng, profile, ors_key)
+    if leg1 is None:
+        return {"error": "ORS não retornou a perna de ida para a montanha."}
+    if "error" in leg1:
+        return leg1
+
+    # ── Perna 2: loop de exploração na altitude ──────────────────────────
+    loop = _ors_single(mt_lat, mt_lng, int(loop_km * 1000), profile, 1, ors_key, 0)
+
+    # ── Perna 3: montanha → casa ─────────────────────────────────────────
+    leg2 = _ors_leg(mt_lat, mt_lng, start_lat, start_lng, profile, ors_key)
+    if leg2 is None:
+        return {"error": "ORS não retornou a perna de volta da montanha."}
+    if "error" in leg2:
+        return leg2
+
+    all_coords  = leg1["coords"]
+    total_dist  = leg1["distance_m"]
+    total_elev  = leg1["elevation_m"]
+
+    if loop:
+        all_coords += loop["coords"]
+        total_dist += loop["distance_m"]
+        total_elev += loop["elevation_m"]
+
+    all_coords += leg2["coords"]
+    total_dist += leg2["distance_m"]
+    total_elev += leg2["elevation_m"]
+
+    return {
+        "coords":          all_coords,
+        "distance_m":      total_dist,
+        "elevation_m":     total_elev,
+        "mountain_target": mountain_target,
+    }
+
+
 def _ors_leg(a_lat, a_lng, b_lat, b_lng, profile, ors_key):
     """Rota ORS de A até B (2 pontos — free tier compatível).
     Retorna {"coords": [(lat,lng),...], "distance_m": float, "elevation_m": float}
@@ -3193,33 +3295,47 @@ with tab_sugerir:
                         f"Cobertura de subida: **{_total_seg_elev:.0f} m** ({_elev_coverage:.0f}% do alvo)"
                     )
 
-                    # Tabela de segmentos escolhidos
-                    _seg_rows = []
-                    for _sg in _chosen:
-                        _seg_rows.append({
-                            "Segmento": _sg.get("name", "—")[:40],
-                            "Dist (m)": f"{_sg.get('distance', 0):.0f}",
-                            "Incl. (%)": f"{_sg.get('avg_grade', 0):.1f}",
-                            "Ganho Strava (m)": f"{_sg.get('elev_difference', 0):.0f}",
-                            "Ganho SRTM (m)": f"{_sg.get('_srtm_ascent', 0):.0f}",
-                            "Dist. largada (km)": f"{_sg['_dist_from_start_km']:.1f}",
-                        })
-                    st.dataframe(
-                        pd.DataFrame(_seg_rows),
-                        hide_index=True, use_container_width=True,
-                    )
+                    # Tabela informativa de segmentos (referência)
+                    if _chosen:
+                        with st.expander(f"📋 Segmentos Strava encontrados ({len(_chosen)})"):
+                            _seg_rows = []
+                            for _sg in _chosen:
+                                _seg_rows.append({
+                                    "Segmento": _sg.get("name", "—")[:40],
+                                    "Dist (m)": f"{_sg.get('distance', 0):.0f}",
+                                    "Incl. (%)": f"{_sg.get('avg_grade', 0):.1f}",
+                                    "Ganho (m)": f"{_sg.get('elev_difference', 0):.0f}",
+                                    "Dist. casa (km)": f"{_sg.get('_dist_from_start_km', 0):.1f}",
+                                })
+                            st.dataframe(pd.DataFrame(_seg_rows),
+                                         hide_index=True, use_container_width=True)
 
-                    # ── 4. Rota em pernas: casa → seg1 → seg2 → ... → casa ──────
-                    # Ordena por distância da largada para criar loop coerente
-                    _chosen_route = sorted(_chosen[:5], key=lambda x: x.get("_dist_from_start_km", 0))
-
-                    with st.spinner(
-                        f"🗺️ Construindo rota em {len(_chosen_route)+1} pernas "
-                        f"(casa → segmentos → casa)..."
-                    ):
-                        _smart_result = _build_segment_route(
+                    # ── 4. SRTM: acha a montanha real + rota em 3 pernas ─────────
+                    with st.spinner("🛰️ Escaneando elevação SRTM em 16 direções para achar a montanha..."):
+                        _mt = _srtm_find_best_target(
                             float(_seg_lat), float(_seg_lng),
-                            _chosen_route, _seg_profile, _seg_ors_key,
+                            max_radius_km=float(_seg_radius),
+                        )
+
+                    if _mt:
+                        st.info(
+                            f"⛰️ Ponto mais alto encontrado: **{_mt['ele']:.0f} m** "
+                            f"(+{_mt['gain']:.0f} m acima da largada) · "
+                            f"distância: **{_mt['dist_km']:.1f} km** · "
+                            f"direção: {_mt['direction_deg']}°"
+                        )
+                    else:
+                        st.warning(
+                            "SRTM não encontrou montanha num raio de "
+                            f"{_seg_radius} km. A rota usará os segmentos Strava disponíveis."
+                        )
+
+                    with st.spinner("🗺️ Construindo rota: casa → montanha → loop → casa..."):
+                        _smart_result = _build_mountain_route(
+                            float(_seg_lat), float(_seg_lng),
+                            float(_seg_km),
+                            _seg_profile, _seg_ors_key,
+                            mountain_target=_mt,
                         )
 
                     if "error" in _smart_result:
@@ -3235,15 +3351,14 @@ with tab_sugerir:
                             if abs(_sm_elev - _seg_elev) / max(_seg_elev, 1) < 0.35
                             else f"⚠️ {_sm_elev:.0f} m ({_sm_pct}% do alvo)"
                         )
-                        _n_legs = _smart_result.get("legs", len(_chosen_route) + 1)
                         st.success(
-                            f"🗺️ Rota gerada: **{_sm_dist:.1f} km** · ⛰️ {_sm_badge} "
-                            f"· {_n_legs} pernas"
+                            f"🗺️ Rota gerada: **{_sm_dist:.1f} km** · ⛰️ {_sm_badge}"
                         )
-                        st.caption(
-                            f"🎯 Rota passa pelas polylines reais de {len(_chosen_route)} "
-                            f"segmento(s) Strava, conectados por ORS (A→B, free tier)."
-                        )
+                        if _mt:
+                            st.caption(
+                                f"🎯 Estratégia: casa → montanha ({_mt['dist_km']:.1f} km) "
+                                f"→ loop no alto ({_mt['ele']:.0f} m) → casa."
+                            )
 
                         # Mapa
                         _sm_pts = _smart_result["coords"]
@@ -3391,7 +3506,6 @@ with tab_sugerir:
                 st.success(
                     f"🗺️ Rota gerada: **{_ors_dist:.1f} km** · ⛰️ {_elev_badge}"
                 )
-                # Mapa ORS
                 _ors_pts = _ors_result["coords"]
                 _ors_map = folium.Map(location=_ors_pts[0], zoom_start=14,
                                        tiles=None, control_scale=True)
@@ -3412,7 +3526,6 @@ with tab_sugerir:
                 ])
                 components.html(_ors_map._repr_html_(), height=450)
 
-                # Download GPX
                 _gpx_lines = [
                     '<?xml version="1.0" encoding="UTF-8"?>',
                     '<gpx version="1.1" creator="PerformanceRun">',
