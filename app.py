@@ -1615,23 +1615,24 @@ def _build_route_map_html(
             # Marcadores de km
             _km_markers(coords, color, fg)
 
-            # Overlays invisíveis por lap — clique mostra detalhes do lap
+            # Overlays invisíveis por lap — sem sobreposição entre segmentos
             act_laps = sorted(laps_by_act.get(act_id, []), key=lambda x: x[1])
             if act_laps:
                 total_dist = sum(l[2] for l in act_laps) or 1
                 cum_frac   = 0.0
+                prev_i     = 0          # cada lap começa exatamente onde o anterior terminou
                 for lap in act_laps:
-                    frac = lap[2] / total_dist
-                    i0   = int(cum_frac * n_pts)
-                    i1   = min(n_pts, int((cum_frac + frac) * n_pts) + 1)
-                    seg  = coords[i0:i1 + 1]
+                    frac    = lap[2] / total_dist
+                    cum_frac += frac
+                    next_i  = min(n_pts, round(cum_frac * n_pts))
+                    seg     = coords[prev_i:next_i + 1]  # +1: slice end é exclusivo
                     if len(seg) >= 2:
                         folium.PolyLine(
                             seg, color=color, weight=14, opacity=0.001,
                             popup=folium.Popup(_lap_popup_html(lap, name, date, color), max_width=230),
                             tooltip=f"Lap {int(lap[1])} · {_fmt(lap[3])}/km",
                         ).add_to(fg)
-                    cum_frac += frac
+                    prev_i = next_i
             else:
                 # sem laps: overlay único com popup geral
                 folium.PolyLine(coords, color=color, weight=14, opacity=0.001,
