@@ -2447,26 +2447,50 @@ def _score_route_match(route, target_km, elev_per_10km_min, elev_per_10km_max, s
 @st.cache_data(ttl=3600, show_spinner=False)
 def _strava_segments_explore(token: str, lat: float, lng: float, radius_km: float = 6.0):
     """Busca segmentos de corrida via Strava Segments Explore API.
-    Retorna lista de segmentos ou dict {"error": "token_invalid"}.
+
+    Estratégia multi-raio: busca primeiro num raio pequeno (perto de casa),
+    depois expande. Assim segmentos próximos e íngremes não ficam apagados
+    pelos populares do centro da cidade num raio grande.
+    Retorna lista ordenada por avg_grade desc, ou dict {"error": "token_invalid"}.
     """
     import requests, math
-    d_lat = radius_km / 111.0
-    d_lng = radius_km / (111.0 * math.cos(math.radians(lat)))
-    bounds = f"{lat - d_lat},{lng - d_lng},{lat + d_lat},{lng + d_lng}"
-    try:
-        r = requests.get(
-            "https://www.strava.com/api/v3/segments/explore",
-            headers={"Authorization": f"Bearer {token}"},
-            params={"bounds": bounds, "activity_type": "running"},
-            timeout=12,
-        )
-        if r.status_code == 200:
-            return r.json().get("segments", [])
-        if r.status_code == 401:
-            return {"error": "token_invalid"}
-    except Exception:
-        pass
-    return []
+
+    def _fetch(r_km):
+        d_lat = r_km / 111.0
+        d_lng = r_km / (111.0 * math.cos(math.radians(lat)))
+        bounds = f"{lat - d_lat},{lng - d_lng},{lat + d_lat},{lng + d_lng}"
+        try:
+            r = requests.get(
+                "https://www.strava.com/api/v3/segments/explore",
+                headers={"Authorization": f"Bearer {token}"},
+                params={"bounds": bounds, "activity_type": "running"},
+                timeout=12,
+            )
+            if r.status_code == 200:
+                return r.json().get("segments", [])
+            if r.status_code == 401:
+                return {"error": "token_invalid"}
+        except Exception:
+            pass
+        return []
+
+    # Raios progressivos: 2 km, metade do raio, raio completo
+    radii = sorted({2.0, round(radius_km / 2, 1), radius_km})
+    seen_ids, all_segs = set(), []
+
+    for r_km in radii:
+        result = _fetch(r_km)
+        if isinstance(result, dict):   # erro de token
+            return result
+        for seg in result:
+            sid = seg.get("id")
+            if sid and sid not in seen_ids:
+                seen_ids.add(sid)
+                all_segs.append(seg)
+
+    # Ordena por inclinação média decrescente — coloca subidas primeiro
+    all_segs.sort(key=lambda s: s.get("avg_grade", 0), reverse=True)
+    return all_segs
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
@@ -2628,7 +2652,10 @@ def _ors_smart_round_trip(start_lat, start_lng, target_m, profile, ors_key,
             ascent = props.get("ascent") or props.get("summary", {}).get("ascent", 0) or 0
             dist   = props.get("summary", {}).get("distance", 0)
 
-            # Score: soma das distâncias mínimas a cada segmento (menor = melhor)
+            # Penalidade de distância: desvio percentual em relação ao alvo
+            dist_penalty = abs(dist - target_m) / max(target_m, 1)
+
+            # Score de cobertura: soma das distâncias mínimas aos segmentos (menor = melhor)
             if segment_midpoints:
                 coverage = sum(
                     _min_dist_to_route(coords, slat, slng)
@@ -2637,12 +2664,18 @@ def _ors_smart_round_trip(start_lat, start_lng, target_m, profile, ors_key,
             else:
                 coverage = 0.0
 
+            # Score combinado: penaliza forte desvio de distância E distância dos segmentos
+            # dist_penalty entra com peso alto para evitar rotas 2x maiores que o pedido
+            combined = coverage + dist_penalty * 5.0
+
             results.append({
                 "coords":         coords,
                 "distance_m":     dist,
                 "elevation_m":    float(ascent),
                 "seed":           seed,
                 "coverage_score": coverage,
+                "combined_score": combined,
+                "dist_penalty":   dist_penalty,
             })
         except Exception:
             continue
@@ -2650,8 +2683,12 @@ def _ors_smart_round_trip(start_lat, start_lng, target_m, profile, ors_key,
     if not results:
         return {"error": "Nenhum traçado retornado pela ORS. Verifique a chave e tente novamente."}
 
-    # Escolhe a rota que passa mais perto dos segmentos de subida
-    best = min(results, key=lambda x: x["coverage_score"])
+    # Descarta rotas com desvio de distância > 40% (evita rotas absurdamente longas)
+    filtered = [r for r in results if r["dist_penalty"] <= 0.40]
+    pool = filtered if filtered else results   # fallback: usa todos se nenhum passar
+
+    # Escolhe a rota com melhor score combinado (distância + cobertura dos segmentos)
+    best = min(pool, key=lambda x: x["combined_score"])
     return best
 
 
