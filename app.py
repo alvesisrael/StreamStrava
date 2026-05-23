@@ -2443,122 +2443,75 @@ def _score_route_match(route, target_km, elev_per_10km_min, elev_per_10km_max, s
 
 
 
-# ── Overpass + SRTM + ORS: Rota Inteligente ─────────────────────────────
-
-def _overpass_fetch_ways(lat: float, lng: float, radius_m: int):
-    """Busca caminhos caminhaveis via Overpass; tenta 3 endpoints. Retorna (list, str_diag)."""
-    import requests
-    query = (
-        "[out:json][timeout:45];"
-        "(way[\"highway\"~\"^(path|track|footway|bridleway|steps|pedestrian"
-        "|living_street|residential|unclassified|tertiary|service)$\"]"
-        f"(around:{radius_m},{lat},{lng}););"
-        "out body geom;"
-    )
-    endpoints = [
-        "https://overpass-api.de/api/interpreter",
-        "https://overpass.kumi.systems/api/interpreter",
-        "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
-    ]
-    last_err = ""
-    for ep in endpoints:
-        try:
-            r = requests.post(ep, data={"data": query}, timeout=50)
-            if r.status_code == 200:
-                els = r.json().get("elements", [])
-                return els, f"{len(els)} vias encontradas ({ep.split('/')[2]})"
-            last_err = f"HTTP {r.status_code} em {ep}"
-        except Exception as exc:
-            last_err = f"Erro em {ep}: {exc}"
-    return [], last_err
-
+# ── Rota Inteligente: Grade SRTM + ORS ────────────────────────────────────
 
 @st.cache_data(ttl=86400, show_spinner=False)
-def _ways_with_elevation(ways_json: str) -> list:
-    """Enriquece cada way com ganho de elevacao SRTM e distancia."""
-    import srtm, math, json
-    ways = json.loads(ways_json)
+def _srtm_grid_hillpoints(lat: float, lng: float, radius_m: int, grid_m: int = 250):
+    """Amostra elevacao SRTM em grade regular e retorna pontos ordenados por altitude."""
+    import srtm, math
+
+    def _hav_m(la1, lo1, la2, lo2):
+        dlat = math.radians(la2 - la1); dlon = math.radians(lo2 - lo1)
+        a = math.sin(dlat/2)**2 + math.cos(math.radians(la1))*math.cos(math.radians(la2))*math.sin(dlon/2)**2
+        return 6_371_000 * 2 * math.asin(math.sqrt(a))
+
     elev_data = srtm.get_data()
-    enriched = []
-    for way in ways:
-        geom = way.get("geometry", [])
-        if len(geom) < 2:
-            continue
-        dist_m = 0.0
-        for i in range(1, len(geom)):
-            dlat = math.radians(geom[i]["lat"] - geom[i - 1]["lat"])
-            dlon = math.radians(geom[i]["lon"] - geom[i - 1]["lon"])
-            a = (
-                math.sin(dlat / 2) ** 2
-                + math.cos(math.radians(geom[i - 1]["lat"]))
-                * math.cos(math.radians(geom[i]["lat"]))
-                * math.sin(dlon / 2) ** 2
-            )
-            dist_m += 6_371_000 * 2 * math.asin(math.sqrt(a))
-        step = max(1, len(geom) // 25)
-        elevs = [elev_data.get_elevation(p["lat"], p["lon"]) for p in geom[::step]]
-        elevs = [e for e in elevs if e is not None]
-        if len(elevs) < 2:
-            continue
-        ascent = sum(max(0.0, elevs[i] - elevs[i - 1]) for i in range(1, len(elevs)))
-        enriched.append({
-            **way,
-            "_ascent_m": round(ascent, 1),
-            "_dist_m":   round(dist_m, 1),
-            "_start":    (geom[0]["lat"],  geom[0]["lon"]),
-            "_end":      (geom[-1]["lat"], geom[-1]["lon"]),
-            "_score":    ascent / max(dist_m / 1000.0, 0.1),
-        })
-    return enriched
+    home_elev = elev_data.get_elevation(lat, lng) or 0
+    dlat_per_m = 1.0 / 111_320
+    dlng_per_m = 1.0 / (111_320 * math.cos(math.radians(lat)))
+    steps = max(int(radius_m / grid_m), 1)
+    points = []
+    for i in range(-steps, steps + 1):
+        for j in range(-steps, steps + 1):
+            plat = lat + i * grid_m * dlat_per_m
+            plng = lng + j * grid_m * dlng_per_m
+            dist_m = _hav_m(lat, lng, plat, plng)
+            if dist_m > radius_m or dist_m < 200:
+                continue
+            e = elev_data.get_elevation(plat, plng)
+            if e is None:
+                continue
+            points.append({
+                "lat": plat, "lng": plng, "elev": e,
+                "gain": e - home_elev, "dist_m": dist_m,
+            })
+    return sorted(points, key=lambda x: x["elev"], reverse=True)
 
 
-def _select_best_ways(ways, start_lat, start_lng,
-                      target_elev_m, target_km, surface_pref="Tanto faz"):
-    """Seleciona greedily os ways com maior ganho/km dentro do orcamento de distancia."""
+def _select_waypoints(hillpoints, target_elev_m, target_km,
+                       min_spacing_m: int = 400, max_wps: int = 4):
+    """Seleciona waypoints de maior altitude garantindo espaco minimo entre eles."""
     import math
 
-    def _hav(la1, ln1, la2, ln2):
-        dlat = math.radians(la2 - la1)
-        dlon = math.radians(ln2 - ln1)
-        a = (math.sin(dlat / 2) ** 2
-             + math.cos(math.radians(la1)) * math.cos(math.radians(la2))
-             * math.sin(dlon / 2) ** 2)
-        return 6371.0 * 2 * math.asin(math.sqrt(a))
+    def _hav_m(la1, lo1, la2, lo2):
+        dlat = math.radians(la2 - la1); dlon = math.radians(lo2 - lo1)
+        a = math.sin(dlat/2)**2 + math.cos(math.radians(la1))*math.cos(math.radians(la2))*math.sin(dlon/2)**2
+        return 6_371_000 * 2 * math.asin(math.sqrt(a))
 
-    budget_km = target_km * 0.70
-    candidates = []
-    for w in ways:
-        if w["_ascent_m"] < 5:
-            continue
-        tags = w.get("tags", {})
-        hw = tags.get("highway", "")
-        surface = tags.get("surface", "")
-        is_trail = hw in ("path", "track", "bridleway", "footway", "steps") or surface in (
-            "unpaved", "gravel", "dirt", "ground", "grass", "mud", "sand"
-        )
-        if surface_pref == "Trilha" and not is_trail:
-            continue
-        if surface_pref == "Asfalto" and is_trail:
-            continue
-        d = _hav(start_lat, start_lng, w["_start"][0], w["_start"][1])
-        candidates.append({**w, "_dist_from_start_km": d})
-
+    # prefer points with positive gain; fall back to all if none exist
+    candidates = [p for p in hillpoints if p["gain"] > 5]
     if not candidates:
-        return []
+        candidates = list(hillpoints)
 
-    candidates.sort(key=lambda x: x["_score"], reverse=True)
-    selected, acc_elev, acc_km = [], 0.0, 0.0
-    for w in candidates:
-        if acc_elev >= target_elev_m:
+    # distance budget: 65% of target left for waypoint legs
+    budget_m = target_km * 0.65 * 1000
+    selected, acc_dist = [], 0.0
+    for p in candidates:
+        if len(selected) >= max_wps:
             break
-        w_km = w["_dist_m"] / 1000.0
-        if acc_km + w_km > budget_km:
+        too_close = any(
+            _hav_m(p["lat"], p["lng"], s["lat"], s["lng"]) < min_spacing_m
+            for s in selected
+        )
+        if too_close:
             continue
-        selected.append(w)
-        acc_elev += w["_ascent_m"]
-        acc_km += w_km
+        if acc_dist + p["dist_m"] * 2 > budget_m:
+            continue
+        selected.append(p)
+        acc_dist += p["dist_m"]
 
-    selected.sort(key=lambda x: x["_dist_from_start_km"])
+    # sort by distance from home so the route flows outward then back
+    selected.sort(key=lambda x: x["dist_m"])
     return selected
 
 
@@ -2595,62 +2548,55 @@ def _ors_leg(a_lat, a_lng, b_lat, b_lng, profile, ors_key):
         return {"error": f"Conexao: {exc}"}
 
 
-def _build_route_overpass_srtm(start_lat, start_lng, target_km, target_elev_m,
-                                profile, ors_key, surface_pref="Tanto faz"):
-    """Constroi rota: Overpass (caminhos OSM) -> SRTM (elevacao) -> ORS (conexao A-B)."""
-    import json
+def _build_route_srtm_ors(start_lat, start_lng, target_km, target_elev_m,
+                           profile, ors_key):
+    """Constroi rota usando grade SRTM para achar morros + ORS para conectar."""
     radius_m = int(target_km / 4.0 * 1000)
-    ways_raw, diag = _overpass_fetch_ways(start_lat, start_lng, radius_m)
-    if not ways_raw:
-        return {"error": f"Overpass nao encontrou caminhos num raio de {radius_m / 1000:.1f} km. Detalhe: {diag}"}
-    ways_elev = _ways_with_elevation(json.dumps(ways_raw))
-    if not ways_elev:
-        return {"error": "Nao foi possivel calcular elevacao SRTM para os caminhos encontrados."}
-    chosen = _select_best_ways(
-        ways_elev, start_lat, start_lng, target_elev_m, target_km, surface_pref
-    )
-    if not chosen:
-        return {"error": "Nenhum caminho com subida suficiente no raio de busca."}
+    with st.spinner("Calculando elevacao SRTM da grade..."):
+        hillpoints = _srtm_grid_hillpoints(start_lat, start_lng, radius_m)
+    if not hillpoints:
+        return {"error": "SRTM nao retornou dados de elevacao para a sua regiao."}
+
+    waypoints = _select_waypoints(hillpoints, target_elev_m, target_km)
+    if not waypoints:
+        return {"error": f"Nenhum ponto com elevacao positiva no raio de {radius_m/1000:.1f} km."}
+
     all_coords, total_dist, total_elev = [], 0.0, 0.0
     cur_lat, cur_lng = start_lat, start_lng
-    for way in chosen:
-        leg = _ors_leg(cur_lat, cur_lng, way["_start"][0], way["_start"][1], profile, ors_key)
-        if leg and "error" not in leg:
+    with st.spinner("Calculando pernas ORS..."):
+        for wp in waypoints:
+            leg = _ors_leg(cur_lat, cur_lng, wp["lat"], wp["lng"], profile, ors_key)
+            if "error" in leg:
+                return {"error": f'ORS: {leg["error"]}'}
             all_coords += leg["coords"]
             total_dist  += leg["distance_m"]
             total_elev  += leg["elevation_m"]
-        elif leg and "error" in leg:
-            return {"error": f'ORS (conexao): {leg["error"]}'}
-        way_pts = [(p["lat"], p["lon"]) for p in way.get("geometry", [])]
-        if way_pts:
-            all_coords += way_pts
-            total_dist  += way["_dist_m"]
-            total_elev  += way["_ascent_m"]
-        cur_lat, cur_lng = way["_end"]
-    home_leg = _ors_leg(cur_lat, cur_lng, start_lat, start_lng, profile, ors_key)
-    if home_leg and "error" not in home_leg:
+            cur_lat, cur_lng = wp["lat"], wp["lng"]
+        home_leg = _ors_leg(cur_lat, cur_lng, start_lat, start_lng, profile, ors_key)
+        if "error" in home_leg:
+            return {"error": f'ORS (volta): {home_leg["error"]}'}
         all_coords += home_leg["coords"]
         total_dist  += home_leg["distance_m"]
         total_elev  += home_leg["elevation_m"]
-    elif home_leg and "error" in home_leg:
-        return {"error": f'ORS (volta): {home_leg["error"]}'}
+
     if not all_coords:
-        return {"error": "Rota vazia - nenhuma perna calculada com sucesso."}
+        return {"error": "Rota vazia - nenhuma perna calculada."}
+
     return {
-        "coords":      all_coords,
-        "distance_m":  total_dist,
-        "elevation_m": total_elev,
-        "ways_used":   len(chosen),
-        "radius_m":    radius_m,
-        "ways_info": [
+        "coords":       all_coords,
+        "distance_m":   total_dist,
+        "elevation_m":  total_elev,
+        "radius_m":     radius_m,
+        "top_elev":     hillpoints[0]["elev"] if hillpoints else 0,
+        "waypoints_used": len(waypoints),
+        "waypoints_info": [
             {
-                "name":     w.get("tags", {}).get("name") or w.get("tags", {}).get("highway", "-"),
-                "highway":  w.get("tags", {}).get("highway", "-"),
-                "ascent_m": w["_ascent_m"],
-                "dist_km":  round(w["_dist_m"] / 1000, 2),
-                "grade":    round(w["_ascent_m"] / max(w["_dist_m"] / 1000, 0.1), 1),
+                "lat":  w["lat"], "lng": w["lng"],
+                "elev": w["elev"],
+                "gain_m": round(w["gain"], 0),
+                "dist_km": round(w["dist_m"] / 1000, 1),
             }
-            for w in chosen
+            for w in waypoints
         ],
     }
 
@@ -2915,20 +2861,20 @@ with tab_sugerir:
     _default_lat = float(_runs_sug["latitude"].dropna().median())  if _has_gps else -27.5954
     _default_lng = float(_runs_sug["longitude"].dropna().median()) if _has_gps else -48.5480
 
-    # ── Rota Inteligente: Overpass + SRTM + ORS ───────────────────────
+    # ── Rota Inteligente: Grade SRTM + ORS ─────────────────────────────
     st.markdown("---")
-    st.subheader("🎯 Rota Inteligente  (OSM + Elevação NASA + Traçado ORS)")
+    st.subheader("🎯 Rota Inteligente  (Grade SRTM NASA + Traçado ORS)")
 
     with st.expander("ℹ️ Como funciona?", expanded=False):
         st.markdown(
             "**Metodologia em 3 etapas:**\n\n"
-            "1. **Overpass API** — varre todos os caminhos caminhavéis do OpenStreetMap "
-            "num raio proporcional ao treino desejado (`raio = distância / 4`).\n"
-            "2. **SRTM NASA** — calcula o ganho real de elevação de cada trecho "
-            "usando dados de satélite (resolução ~30 m).\n"
-            "3. **ORS (OpenRouteService)** — conecta os trechos selecionados em circuito "
-            "fechado, saindo e voltando ao ponto de largada.\n\n"
-            "> Não requer conta Strava. Apenas uma chave ORS gratuita (openrouteservice.org)."
+            "1. **SRTM NASA** — amostra elevação real em grade de 250 m dentro do raio de busca "
+            "(`raio = distância / 4`). Dados locais do satélite — sem dep. de API externa.\n"
+            "2. **Seleção de morros** — identifica pontos de maior altitude com espaçamento "
+            "mínimo entre eles, dentro do orçamento de distância.\n"
+            "3. **ORS (OpenRouteService)** — conecta os pontos em circuito fechado "
+            "saindo e voltando ao ponto de largada.\n\n"
+            "> Apenas a chave ORS é necessária. Sem Strava, sem Overpass."
         )
 
     col_ri1, col_ri2 = st.columns(2)
@@ -2960,10 +2906,6 @@ with tab_sugerir:
             "Perfil de rota", ["foot-walking", "foot-hiking", "cycling-road"],
             key="ri_profile",
         )
-        _ri_surface = st.selectbox(
-            "Preferência de superfície", ["Tanto faz", "Trilha", "Asfalto"],
-            key="ri_surface",
-        )
 
     _ri_radius_preview = int(_ri_dist / 4.0 * 1000)
     st.caption(
@@ -2975,15 +2917,13 @@ with tab_sugerir:
         if not _ors_key_ri:
             st.warning("Informe a chave ORS para continuar.")
         else:
-            with st.spinner("Buscando caminhos OSM, calculando elevação e montando rota..."):
-                _ri_result = _build_route_overpass_srtm(
+            _ri_result = _build_route_srtm_ors(
                     start_lat=_ri_lat,
                     start_lng=_ri_lng,
                     target_km=_ri_dist,
                     target_elev_m=_ri_elev,
                     profile=_ri_profile,
                     ors_key=_ors_key_ri,
-                    surface_pref=_ri_surface,
                 )
 
             if "error" in _ri_result:
@@ -2991,13 +2931,14 @@ with tab_sugerir:
             else:
                 _ri_km   = _ri_result["distance_m"] / 1000
                 _ri_gain = _ri_result["elevation_m"]
-                _ri_ways = _ri_result["ways_used"]
+                _ri_wps  = _ri_result["waypoints_used"]
                 _ri_rad  = _ri_result["radius_m"] / 1000
+                _ri_top  = _ri_result["top_elev"]
 
                 st.success(
                     f"Rota gerada: **{_ri_km:.1f} km** | "
                     f"**{_ri_gain:.0f} m** de ganho | "
-                    f"{_ri_ways} trechos OSM | raio {_ri_rad:.1f} km"
+                    f"{_ri_wps} waypoints SRTM | pico {_ri_top:.0f} m | raio {_ri_rad:.1f} km"
                 )
 
                 import folium
@@ -3017,14 +2958,14 @@ with tab_sugerir:
                 ).add_to(_ri_map)
                 folium_static(_ri_map, width=700, height=420)
 
-                if _ri_result.get("ways_info"):
-                    st.markdown("**Trechos utilizados:**")
-                    _ri_df = pd.DataFrame(_ri_result["ways_info"]).rename(columns={
-                        "name":     "Nome / Tipo",
-                        "highway":  "Highway",
-                        "ascent_m": "Subida (m)",
-                        "dist_km":  "Dist (km)",
-                        "grade":    "Inclinação (m/km)",
+                if _ri_result.get("waypoints_info"):
+                    st.markdown("**Waypoints selecionados (morros SRTM):**")
+                    _ri_df = pd.DataFrame(_ri_result["waypoints_info"]).rename(columns={
+                        "lat":      "Latitude",
+                        "lng":      "Longitude",
+                        "elev":     "Altitude (m)",
+                        "gain_m":   "Ganho vs largada (m)",
+                        "dist_km":  "Dist. da largada (km)",
                     })
                     st.dataframe(_ri_df, use_container_width=True, hide_index=True)
 
