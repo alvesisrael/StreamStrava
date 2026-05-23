@@ -2593,40 +2593,54 @@ def _select_segments_for_route(
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def _srtm_find_best_target(start_lat: float, start_lng: float,
-                            max_radius_km: float = 8.0):
-    """Escaneia 16 direções × 7 distâncias via SRTM para achar o ponto
-    de maior altitude acessível a partir da largada.
+                            max_radius_km: float = 8.0,
+                            target_km: float = 10.0):
+    """Escaneia 16 direções × distâncias progressivas via SRTM.
 
-    Retorna {"lat", "lng", "ele", "dist_km", "direction_deg"} ou None.
+    Pontuação: ganho_de_elevação / dist_km  (prefere subidas próximas e íngremes).
+    Limita a busca a max(max_radius_km, target_km/4) para que as pernas de
+    ida+volta não ultrapassem metade da distância alvo.
+
+    Retorna {"lat", "lng", "ele", "gain", "dist_km", "direction_deg", "score"} ou None.
     """
     import srtm, math
-    elev_data  = srtm.get_data()
-    home_ele   = elev_data.get_elevation(start_lat, start_lng) or 0
-    best       = None
+    elev_data = srtm.get_data()
+    home_ele  = elev_data.get_elevation(start_lat, start_lng) or 0
+
+    # Distância máxima: não mais que 1/4 do treino (ida+volta = metade do alvo)
+    max_leg   = min(max_radius_km, target_km / 4.0)
+    # Distâncias a amostrar: 8 passos até max_leg
+    step      = max(0.5, max_leg / 8)
+    distances = [round(step * i, 2) for i in range(1, 9) if step * i <= max_leg + 0.01]
+
+    best = None
 
     for angle_deg in range(0, 360, 22):          # 16 direções
         angle_rad = math.radians(angle_deg)
-        for dist_km in [1.5, 2.5, 3.5, 4.5, 6.0, max_radius_km]:
-            dlat = dist_km / 111.0 * math.cos(angle_rad)
-            dlon = dist_km / (111.0 * math.cos(math.radians(start_lat))) * math.sin(angle_rad)
+        for dist_km in distances:
+            dlat    = dist_km / 111.0 * math.cos(angle_rad)
+            dlon    = dist_km / (111.0 * math.cos(math.radians(start_lat))) * math.sin(angle_rad)
             tgt_lat = start_lat + dlat
             tgt_lon = start_lng + dlon
-            ele = elev_data.get_elevation(tgt_lat, tgt_lon)
+            ele     = elev_data.get_elevation(tgt_lat, tgt_lon)
             if ele is None:
                 continue
-            gain = ele - home_ele
-            if gain > 0 and (best is None or ele > best["ele"]):
+            gain  = ele - home_ele
+            if gain < 50:          # ignora pontos quase planos
+                continue
+            score = gain / dist_km # ganho por km percorrido
+            if best is None or score > best["score"]:
                 best = {
-                    "lat":          tgt_lat,
-                    "lng":          tgt_lon,
-                    "ele":          ele,
-                    "gain":         gain,
-                    "dist_km":      dist_km,
+                    "lat":           tgt_lat,
+                    "lng":           tgt_lon,
+                    "ele":           ele,
+                    "gain":          gain,
+                    "dist_km":       dist_km,
                     "direction_deg": angle_deg,
+                    "score":         score,
                 }
 
-    # Só retorna se encontrou algo pelo menos 50m acima da largada
-    return best if (best and best["gain"] >= 50) else None
+    return best
 
 
 def _build_mountain_route(start_lat, start_lng, target_km, profile, ors_key,
@@ -2657,20 +2671,20 @@ def _build_mountain_route(start_lat, start_lng, target_km, profile, ors_key,
 
     # ── Perna 1: casa → montanha ────────────────────────────────────────
     leg1 = _ors_leg(start_lat, start_lng, mt_lat, mt_lng, profile, ors_key)
-    if leg1 is None:
-        return {"error": "ORS não retornou a perna de ida para a montanha."}
+    if not leg1:
+        return {"error": "ORS não respondeu na perna de ida."}
     if "error" in leg1:
-        return leg1
+        return {"error": f"Perna de ida: {leg1['error']}"}
 
     # ── Perna 2: loop de exploração na altitude ──────────────────────────
     loop = _ors_single(mt_lat, mt_lng, int(loop_km * 1000), profile, 1, ors_key, 0)
 
     # ── Perna 3: montanha → casa ─────────────────────────────────────────
     leg2 = _ors_leg(mt_lat, mt_lng, start_lat, start_lng, profile, ors_key)
-    if leg2 is None:
-        return {"error": "ORS não retornou a perna de volta da montanha."}
+    if not leg2:
+        return {"error": "ORS não respondeu na perna de volta."}
     if "error" in leg2:
-        return leg2
+        return {"error": f"Perna de volta: {leg2['error']}"}
 
     all_coords  = leg1["coords"]
     total_dist  = leg1["distance_m"]
@@ -2717,16 +2731,16 @@ def _ors_leg(a_lat, a_lng, b_lat, b_lng, profile, ors_key):
             ascent = props.get("ascent") or props.get("summary", {}).get("ascent", 0) or 0
             dist   = props.get("summary", {}).get("distance", 0)
             return {"coords": coords, "distance_m": dist, "elevation_m": float(ascent)}
-        if r.status_code in (401, 403):
-            try:
-                msg = r.json().get("error", {})
-                msg = msg.get("message", str(r.status_code)) if isinstance(msg, dict) else str(msg)
-            except Exception:
-                msg = str(r.status_code)
-            return {"error": f"ORS {r.status_code}: {msg}"}
+        # Qualquer status não-200: extrai mensagem real da ORS
+        try:
+            err_body = r.json()
+            msg = err_body.get("error", {})
+            msg = msg.get("message", str(err_body)) if isinstance(msg, dict) else str(msg)
+        except Exception:
+            msg = f"HTTP {r.status_code}"
+        return {"error": f"ORS {r.status_code}: {msg}"}
     except Exception as exc:
-        return {"error": str(exc)}
-    return None
+        return {"error": f"Conexão: {exc}"}
 
 
 def _build_segment_route(start_lat, start_lng, chosen_segments, profile, ors_key):
@@ -3315,6 +3329,7 @@ with tab_sugerir:
                         _mt = _srtm_find_best_target(
                             float(_seg_lat), float(_seg_lng),
                             max_radius_km=float(_seg_radius),
+                            target_km=float(_seg_km),
                         )
 
                     if _mt:
