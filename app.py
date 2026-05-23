@@ -1490,6 +1490,7 @@ def _build_route_map_html(
     lng_c: float,
     tile: str,
     height: int,
+    color_by: str = "Padrão",  # "Padrão" | "Pace" | "FC" | "Elevação"
 ) -> str:
     """
     Constrói o HTML completo do mapa Folium e devolve como string cacheada.
@@ -1502,11 +1503,9 @@ def _build_route_map_html(
     ESRI_TOPO = ("https://server.arcgisonline.com/ArcGIS/rest/services/"
                  "World_Topo_Map/MapServer/tile/{z}/{y}/{x}", "Tiles © Esri")
     TILES = {
-        "Claro":       lambda m: folium.TileLayer("CartoDB positron",    name="Claro").add_to(m),
-        "Escuro":      lambda m: folium.TileLayer("CartoDB dark_matter", name="Escuro").add_to(m),
-        "Satélite":    lambda m: folium.TileLayer(ESRI_SAT[0],  attr=ESRI_SAT[1],  name="Sat").add_to(m),
-        "Topográfico": lambda m: folium.TileLayer("OpenTopoMap",          name="Topo").add_to(m),
-        "Topo ESRI":   lambda m: folium.TileLayer(ESRI_TOPO[0], attr=ESRI_TOPO[1], name="TopoE").add_to(m),
+        "Claro":       lambda m: folium.TileLayer("CartoDB positron", name="Claro").add_to(m),
+        "Satélite":    lambda m: folium.TileLayer(ESRI_SAT[0], attr=ESRI_SAT[1], name="Sat").add_to(m),
+        "Topográfico": lambda m: folium.TileLayer("OpenTopoMap",      name="Topo").add_to(m),
     }
 
     m = folium.Map(location=[lat_c, lng_c], zoom_start=13, tiles=None, control_scale=True)
@@ -1523,6 +1522,34 @@ def _build_route_map_html(
     laps_by_act = defaultdict(list)
     for lap in laps_data:
         laps_by_act[lap[0]].append(lap)
+
+    # ── Gradiente de cor por métrica ────────────────────────────────────────
+    def _metric_hex(value, vmin, vmax, high_is_red=True):
+        """Verde → Amarelo → Vermelho conforme intensidade da métrica."""
+        if vmax <= vmin or value is None or value == 0:
+            return "#f1c40f"
+        t = max(0.0, min(1.0, (value - vmin) / (vmax - vmin)))
+        if not high_is_red:
+            t = 1.0 - t
+        if t < 0.5:
+            s = t * 2
+            r = int(46  + (241 - 46)  * s)
+            g = int(204 + (196 - 204) * s)
+            b = int(113 + (15  - 113) * s)
+        else:
+            s = (t - 0.5) * 2
+            r = int(241 + (231 - 241) * s)
+            g = int(196 + (76  - 196) * s)
+            b = int(15  + (60  - 15)  * s)
+        return f"#{r:02x}{g:02x}{b:02x}"
+
+    # pré-computa min/max da métrica escolhida em todos os laps
+    _METRIC_IDX   = {"Pace": 3, "FC": 4, "Elevação": 6}
+    _HIGH_IS_RED  = {"Pace": False, "FC": True, "Elevação": True}  # Pace: rápido=red=baixo valor
+    _m_idx        = _METRIC_IDX.get(color_by)
+    _m_vals       = [lap[_m_idx] for lap in laps_data
+                     if _m_idx is not None and lap[_m_idx] and lap[_m_idx] > 0]
+    _m_min, _m_max = (min(_m_vals), max(_m_vals)) if _m_vals else (0, 1)
 
     def _fmt(sec):
         if not sec or sec <= 0: return "—"
@@ -1602,23 +1629,27 @@ def _build_route_map_html(
         if coords:
             n_pts = len(coords) - 1
 
-            # Rota animada (AntPath) com popup resumo
-            try:
-                from folium.plugins import AntPath
-                AntPath(coords, color=color, weight=4.5, dash_array=[12, 20],
-                        delay=800, opacity=0.92,
-                        popup=folium.Popup(_act_popup_html(a), max_width=250)).add_to(fg)
-            except Exception:
-                folium.PolyLine(coords, color=color, weight=4.5, opacity=0.9,
-                                popup=folium.Popup(_act_popup_html(a), max_width=250)).add_to(fg)
+            # ── Rota principal ──────────────────────────────────────────────
+            if color_by == "Padrão":
+                try:
+                    from folium.plugins import AntPath
+                    AntPath(coords, color=color, weight=4.5, dash_array=[12, 20],
+                            delay=800, opacity=0.92,
+                            popup=folium.Popup(_act_popup_html(a), max_width=250)).add_to(fg)
+                except Exception:
+                    folium.PolyLine(coords, color=color, weight=4.5, opacity=0.9,
+                                    popup=folium.Popup(_act_popup_html(a), max_width=250)).add_to(fg)
+            else:
+                # traço guia cinza fino — os laps coloridos ficam por cima
+                folium.PolyLine(coords, color="#888888", weight=2,
+                                opacity=0.25).add_to(fg)
 
             # Marcadores de km
             _km_markers(coords, color, fg)
 
-            # Overlays invisíveis por lap
-            # Calculados primeiro, adicionados em ordem reversa:
-            # Leaflet renderiza o último adicionado por cima — ao inverter,
-            # Lap 1 fica no topo e ganha o hover nos pontos limítrofes.
+            # ── Segmentos por lap ────────────────────────────────────────────
+            # Calculados primeiro; adicionados em ordem reversa para que
+            # laps anteriores fiquem no topo e ganhem o hover nos limites.
             act_laps = sorted(laps_by_act.get(act_id, []), key=lambda x: x[1])
             if act_laps:
                 total_dist = sum(l[2] for l in act_laps) or 1
@@ -1630,15 +1661,32 @@ def _build_route_map_html(
                     seg       = coords[prev_i:next_i + 1]
                     lap_segs.append((lap, seg))
                     prev_i    = next_i
-                for lap, seg in reversed(lap_segs):  # laps anteriores ficam por cima
-                    if len(seg) >= 2:
+                for lap, seg in reversed(lap_segs):
+                    if len(seg) < 2:
+                        continue
+                    if color_by != "Padrão" and _m_idx is not None:
+                        seg_color = _metric_hex(
+                            lap[_m_idx], _m_min, _m_max,
+                            high_is_red=_HIGH_IS_RED.get(color_by, True)
+                        )
+                        # segmento visível colorido por métrica
+                        folium.PolyLine(
+                            seg, color=seg_color, weight=5, opacity=0.92,
+                        ).add_to(fg)
+                        # overlay invisível para tooltip/popup
+                        folium.PolyLine(
+                            seg, color=seg_color, weight=14, opacity=0.001,
+                            popup=folium.Popup(_lap_popup_html(lap, name, date, seg_color), max_width=230),
+                            tooltip=f"Lap {int(lap[1])} · {_fmt(lap[3])}/km",
+                        ).add_to(fg)
+                    else:
+                        # modo padrão: só overlay invisível
                         folium.PolyLine(
                             seg, color=color, weight=14, opacity=0.001,
                             popup=folium.Popup(_lap_popup_html(lap, name, date, color), max_width=230),
                             tooltip=f"Lap {int(lap[1])} · {_fmt(lap[3])}/km",
                         ).add_to(fg)
             else:
-                # sem laps: overlay único com popup geral
                 folium.PolyLine(coords, color=color, weight=14, opacity=0.001,
                                 popup=folium.Popup(_act_popup_html(a), max_width=250)).add_to(fg)
 
@@ -1799,20 +1847,32 @@ with tab_mapa:
         col1, col2 = st.columns([4, 1])
         with col1:
             tile = st.radio("Mapa base",
-                            ["Claro","Escuro","Satélite","Topográfico","Topo ESRI"],
+                            ["Claro", "Satélite", "Topográfico"],
                             horizontal=True, key="mapa_tile",
-                            help="Satélite/Topo ESRI: ótimos para trail.")
+                            help="Satélite / Topográfico: ótimos para trail.")
         with col2:
             st.markdown("<br>", unsafe_allow_html=True)
             expand = st.checkbox("🔍 Ampliar", value=False, key="mapa_expand")
 
+        color_by = st.radio(
+            "Colorir rota por",
+            ["Padrão", "Pace", "FC", "Elevação"],
+            horizontal=True, key="mapa_color_by",
+            help=(
+                "**Padrão**: cor da atividade  |  "
+                "**Pace**: 🟢 lento → 🔴 rápido  |  "
+                "**FC**: 🟢 baixa → 🔴 alta  |  "
+                "**Elevação**: 🟢 plano → 🔴 muita subida"
+            ),
+        )
+
         height = 720 if expand else 550
 
-        # Constrói (ou recupera do cache) o HTML — instantâneo na 2ª chamada
         with st.spinner("Preparando mapa…"):
             html_map = _build_route_map_html(
                 act_data=act_data, laps_data=laps_data,
-                lat_c=lat_c, lng_c=lng_c, tile=tile, height=height)
+                lat_c=lat_c, lng_c=lng_c, tile=tile, height=height,
+                color_by=color_by)
 
         # Renderiza dentro de iframe: pan/zoom/clique não disparam rerun Python
         components.html(html_map, height=height, scrolling=False)
