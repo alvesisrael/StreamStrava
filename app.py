@@ -2571,18 +2571,22 @@ def _ors_via_waypoints(start_lat, start_lng, waypoints, profile, ors_key):
     """Gera rota ORS ponto-a-ponto passando pelos waypoints (start→wp1→wp2→...→start).
 
     waypoints: lista de (lat, lng)
-    Retorna {"coords": [...], "distance_m": float, "elevation_m": float} ou None.
+    Retorna {"coords": [...], "distance_m": float, "elevation_m": float}
+         ou {"error": "<mensagem legível>"} em caso de falha.
     """
     import requests
     url = f"https://api.openrouteservice.org/v2/directions/{profile}/geojson"
 
+    # ORS free tier aceita até 50 waypoints; limitamos a 20 para segurança
+    capped = waypoints[:20]
+
     coords = [[start_lng, start_lat]]
-    for wp_lat, wp_lng in waypoints:
+    for wp_lat, wp_lng in capped:
         coords.append([wp_lng, wp_lat])
     coords.append([start_lng, start_lat])   # fecha o loop
 
     if len(coords) < 3:
-        return None
+        return {"error": "Nenhum waypoint disponível para traçar a rota."}
 
     body = {"coordinates": coords, "elevation": True}
     try:
@@ -2599,9 +2603,17 @@ def _ors_via_waypoints(start_lat, start_lng, waypoints, profile, ors_key):
             ascent = props.get("ascent") or props.get("summary", {}).get("ascent", 0) or 0
             dist   = props.get("summary", {}).get("distance", 0)
             return {"coords": route_coords, "distance_m": dist, "elevation_m": float(ascent)}
-    except Exception:
-        pass
-    return None
+        # Devolve a mensagem de erro da API para o UI poder exibir
+        try:
+            err_body = r.json()
+            err_msg  = err_body.get("error", {})
+            if isinstance(err_msg, dict):
+                err_msg = err_msg.get("message", str(err_body))
+        except Exception:
+            err_msg = f"HTTP {r.status_code}"
+        return {"error": f"ORS {r.status_code}: {err_msg}"}
+    except Exception as exc:
+        return {"error": f"Erro de conexão: {exc}"}
 
 
 def _ors_single(lat, lng, target_m, profile, seed, ors_key, steepness_level):
@@ -3011,10 +3023,13 @@ with tab_sugerir:
                             _waypoints, _seg_profile, _seg_ors_key,
                         )
 
-                    if _smart_result is None:
-                        st.error(
-                            "ORS não conseguiu conectar os waypoints. "
-                            "Verifique a chave ORS ou tente reduzir o raio de busca."
+                    if _smart_result is None or "error" in _smart_result:
+                        _err_detail = (_smart_result or {}).get("error", "resposta vazia")
+                        st.error(f"❌ ORS não conseguiu traçar a rota: **{_err_detail}**")
+                        st.caption(
+                            f"Waypoints enviados: {len(_waypoints)} ponto(s). "
+                            "Dicas: reduza o raio de busca, diminua o ganho alvo, "
+                            "ou verifique se a chave ORS tem saldo disponível."
                         )
                     else:
                         _sm_dist = _smart_result["distance_m"] / 1000
