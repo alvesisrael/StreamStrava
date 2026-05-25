@@ -1107,35 +1107,185 @@ with tab_desemp:
         if df_e.empty:
             st.info("Nenhum dado de elevação disponível.")
         else:
-            df_e["elev_km"] = df_e["elevation_gain"] / df_e["distance_km"]
-            ec1,ec2,ec3,ec4 = st.columns(4)
-            ec1.metric("⛰️ Elevação Total",    f"{df_e['elevation_gain'].sum():,.0f} m")
-            ec2.metric("📈 Maior Subida",       f"{df_e['elevation_gain'].max():.0f} m")
-            ec3.metric("📐 Gradiente Médio",    f"{df_e['elev_km'].mean():.1f} m/km")
-            ec4.metric("🏔️ Runs >300m",        f"{len(df_e[df_e['elevation_gain']>=300])}")
+            # ── métricas derivadas ──────────────────────────────────────────────────
+            df_e["elev_km"]   = df_e["elevation_gain"] / df_e["distance_km"]
+            # Pace Vertical: metros de desnível positivo por hora de movimento
+            df_e["vert_pace"] = df_e.apply(
+                lambda r: r["elevation_gain"] / (r["moving_time_s"] / 3600)
+                if pd.notna(r.get("moving_time_s")) and r["moving_time_s"] > 0 else np.nan, axis=1)
+            # GAP — Grade Adjusted Pace: normaliza o pace para equivalente plano
+            # fórmula: gap = pace_sec / (1 + 0.033·g + 0.00012·g³)  onde g = grade %
+            df_e["grade_pct"] = df_e["elev_km"] / 10          # m/km → % (÷ 10)
+            df_e["gap_sec"]   = df_e.apply(
+                lambda r: r["pace_sec_km"] / max(0.5, 1 + 0.033 * r["grade_pct"]
+                                                     + 0.00012 * r["grade_pct"] ** 3)
+                if pd.notna(r["pace_sec_km"]) else np.nan, axis=1)
+
+            # ── KPI cards ──────────────────────────────────────────────────────────
+            ec1, ec2, ec3, ec4 = st.columns(4)
+            ec1.metric("⛰️ Elevação Total", f"{df_e['elevation_gain'].sum():,.0f} m")
+            ec2.metric("📈 Maior Subida",   f"{df_e['elevation_gain'].max():.0f} m")
+            vp_med = df_e["vert_pace"].median()
+            ec3.metric("⚡ Pace Vertical",
+                       f"{vp_med:.0f} m/h" if pd.notna(vp_med) else "—",
+                       help="Mediana de metros de desnível positivo por hora — "
+                            "quanto maior, mais eficiente nas subidas.")
+            valid_gap = df_e[df_e["gap_sec"].notna() & df_e["pace_sec_km"].notna()]
+            if not valid_gap.empty:
+                custo = (valid_gap["pace_sec_km"] - valid_gap["gap_sec"]).mean()
+                ec4.metric("🎯 Custo de Subida", f"+{custo:.0f} s/km",
+                           help="Quanto a elevação adiciona ao pace real vs GAP (pace plano equivalente). "
+                                "Maior = subidas mais custosas.")
+            else:
+                ec4.metric("🏔️ Runs >300 m", f"{len(df_e[df_e['elevation_gain'] >= 300])}")
+
+            # ── linha 1: GAP scatter  |  acumulado por período ─────────────────────
             col_e1, col_e2 = st.columns(2)
+
             with col_e1:
-                df_pe = df_e[df_e["pace_sec_km"].notna()].copy()
-                df_pe["Pace_min"] = df_pe["pace_sec_km"] / 60
-                fig = px.scatter(df_pe, x="elevation_gain", y="Pace_min",
-                                 title="Pace vs Elevação",
-                                 trendline="lowess", trendline_color_override=RED,
-                                 opacity=0.65,
-                                 labels={"elevation_gain":"Elevação (m)","Pace_min":"Pace (min/km)"})
-                set_pace_yaxis(fig, df_pe["pace_sec_km"])
-                st.plotly_chart(fig, width="stretch")
+                df_gap = df_e[df_e["gap_sec"].notna() & df_e["pace_sec_km"].notna()].copy()
+                if not df_gap.empty:
+                    df_gap["Pace_min"] = df_gap["pace_sec_km"] / 60
+                    df_gap["GAP_min"]  = df_gap["gap_sec"] / 60
+                    fig_gap = go.Figure()
+                    fig_gap.add_scatter(
+                        x=df_gap["Pace_min"], y=df_gap["GAP_min"],
+                        mode="markers",
+                        marker=dict(color=df_gap["elevation_gain"], colorscale="RdYlGn_r",
+                                    size=8, opacity=0.75,
+                                    colorbar=dict(title="Elevação<br>(m)", x=1.02)),
+                        text=df_gap.apply(
+                            lambda r: f"{r['name']}<br>{r['start_date'].strftime('%d/%m/%y')}", axis=1),
+                        hovertemplate="Pace: %{x:.2f} min/km<br>GAP: %{y:.2f} min/km<br>%{text}<extra></extra>")
+                    # diagonal: pace == GAP  (terreno plano)
+                    mn = min(df_gap["Pace_min"].min(), df_gap["GAP_min"].min())
+                    mx = max(df_gap["Pace_min"].max(), df_gap["GAP_min"].max())
+                    fig_gap.add_scatter(x=[mn, mx], y=[mn, mx], mode="lines",
+                                        line=dict(color=GRAY, dash="dash", width=1),
+                                        showlegend=False)
+                    fig_gap.update_layout(title="Pace Real vs GAP",
+                                          xaxis_title="Pace Real (min/km)",
+                                          yaxis_title="GAP — Plano Equivalente (min/km)",
+                                          showlegend=False)
+                    set_pace_yaxis(fig_gap, df_gap["pace_sec_km"])
+                    fig_gap.update_yaxes(autorange="reversed")
+                    st.plotly_chart(fig_gap, width="stretch")
+                    st.caption("Pontos abaixo da diagonal = subidas com alto custo de pace. "
+                               "GAP normaliza para terreno plano equivalente.")
+
             with col_e2:
-                top10 = df_e.nlargest(10,"elevation_gain")[
-                    ["start_date","name","distance_km","elevation_gain","elev_km","pace_sec_km"]].copy()
-                top10["Data"]     = top10["start_date"].dt.strftime("%d/%m/%Y")
-                top10["Pace"]     = fmt_pace_vec(top10["pace_sec_km"])
-                top10["Elev/km"]  = top10["elev_km"].apply(lambda x: f"{x:.1f}")
-                top10["Distância"]= top10["distance_km"].apply(lambda x: f"{x:.1f} km")
-                top10["Elevação"] = top10["elevation_gain"].apply(lambda x: f"{x:.0f} m")
-                st.markdown("**Top 10 atividades com maior elevação**")
-                st.dataframe(top10[["Data","name","Distância","Elevação","Elev/km","Pace"]]
-                               .rename(columns={"name":"Atividade"}),
-                             hide_index=True, use_container_width=True)
+                df_e["_week"]  = df_e["start_date"].dt.to_period("W").apply(lambda x: x.start_time)
+                df_e["_month"] = df_e["start_date"].dt.to_period("M").apply(lambda x: x.start_time)
+                _period_opts   = {"Semana": "_week", "Mês": "_month"}
+                _period_sel    = st.radio("Acumulado por", list(_period_opts.keys()),
+                                          horizontal=True, key="elev_period")
+                _pcol          = _period_opts[_period_sel]
+                df_trend = df_e.groupby(_pcol).agg(
+                    elev_total=("elevation_gain", "sum"),
+                    n_runs=("elevation_gain", "count")
+                ).reset_index().rename(columns={_pcol: "periodo"})
+                fig_trend = go.Figure()
+                fig_trend.add_bar(x=df_trend["periodo"], y=df_trend["elev_total"],
+                                  name="Elevação total", marker_color=BLUE, opacity=0.75,
+                                  hovertemplate="<b>%{x|%d/%m/%y}</b><br>%{y:.0f} m<extra></extra>")
+                if len(df_trend) >= 4:
+                    df_trend["rolling"] = df_trend["elev_total"].rolling(4, min_periods=1).mean()
+                    fig_trend.add_scatter(x=df_trend["periodo"], y=df_trend["rolling"],
+                                          mode="lines", name="Média móvel (4×)",
+                                          line=dict(color=RED, width=2))
+                fig_trend.update_layout(title=f"Acumulado de Elevação por {_period_sel}",
+                                        yaxis_title="Elevação (m)",
+                                        legend=dict(orientation="h", y=-0.22))
+                st.plotly_chart(fig_trend, width="stretch")
+
+            # ── linha 2: eficiência ao longo do tempo  |  Pace×FC×Elevação ─────────
+            col_e3, col_e4 = st.columns(2)
+
+            with col_e3:
+                df_vp = df_e[df_e["vert_pace"].notna()].copy()
+                if not df_vp.empty:
+                    df_vp["_month"] = df_vp["start_date"].dt.to_period("M").apply(lambda x: x.start_time)
+                    df_eff = df_vp.groupby("_month").agg(
+                        vp_med=("vert_pace", "median"),
+                        n=("vert_pace", "count")
+                    ).reset_index()
+                    fig_eff = go.Figure()
+                    fig_eff.add_scatter(
+                        x=df_eff["_month"], y=df_eff["vp_med"],
+                        mode="lines+markers", name="Pace Vertical (m/h)",
+                        line=dict(color=GREEN, width=2.5),
+                        marker=dict(size=(df_eff["n"].clip(3, 10) * 1.5).astype(float)),
+                        hovertemplate="<b>%{x|%b %Y}</b><br>%{y:.0f} m/h<extra></extra>")
+                    # tendência linear
+                    if len(df_eff) >= 3:
+                        import numpy as _np
+                        x_num = (_np.arange(len(df_eff))).astype(float)
+                        coef  = _np.polyfit(x_num, df_eff["vp_med"].values, 1)
+                        trend = _np.polyval(coef, x_num)
+                        fig_eff.add_scatter(x=df_eff["_month"], y=trend,
+                                            mode="lines", name="Tendência",
+                                            line=dict(color=AMBER if coef[0] < 0 else GREEN,
+                                                      dash="dot", width=1.5))
+                    fig_eff.update_layout(
+                        title="Eficiência em Subidas — evolução",
+                        yaxis_title="Pace Vertical (m/h)",
+                        legend=dict(orientation="h", y=-0.22))
+                    st.plotly_chart(fig_eff, width="stretch")
+                    st.caption("Subindo = ficando mais eficiente nas subidas ao longo do tempo.")
+                else:
+                    st.info("Dados de tempo de movimento insuficientes para calcular pace vertical.")
+
+            with col_e4:
+                df_pfc = df_e[df_e["pace_sec_km"].notna() & df_e["avg_hr"].notna()].copy()
+                if not df_pfc.empty:
+                    df_pfc["Pace_min"] = df_pfc["pace_sec_km"] / 60
+                    _zone_map = {
+                        "Z1 — Recuperação":  "#2ecc71",
+                        "Z2 — Base aeróbica": "#3498db",
+                        "Z3 — Tempo":         "#f39c12",
+                        "Z4 — Limiar":        "#e67e22",
+                        "Z5 — VO2max":        "#e74c3c",
+                    }
+                    def _hr_zone(hr):
+                        if hr < 120:   return "Z1 — Recuperação"
+                        elif hr < 140: return "Z2 — Base aeróbica"
+                        elif hr < 155: return "Z3 — Tempo"
+                        elif hr < 170: return "Z4 — Limiar"
+                        else:          return "Z5 — VO2max"
+                    df_pfc["Zona FC"] = df_pfc["avg_hr"].apply(_hr_zone)
+                    fig_pfc = px.scatter(
+                        df_pfc, x="elevation_gain", y="Pace_min",
+                        color="Zona FC", size="distance_km",
+                        color_discrete_map=_zone_map,
+                        title="Pace × FC × Elevação",
+                        labels={"elevation_gain": "Elevação (m)",
+                                "Pace_min": "Pace (min/km)",
+                                "distance_km": "Distância (km)"},
+                        hover_data={"name": True, "avg_hr": ":.0f"},
+                        opacity=0.82)
+                    set_pace_yaxis(fig_pfc, df_pfc["pace_sec_km"])
+                    fig_pfc.update_layout(legend=dict(orientation="h", y=-0.32, font_size=10))
+                    st.plotly_chart(fig_pfc, width="stretch")
+                else:
+                    st.info("Sem dados de FC disponíveis para análise combinada.")
+
+            # ── tabela top 10 ──────────────────────────────────────────────────────
+            st.markdown("**Top 10 atividades com maior elevação**")
+            top10 = df_e.nlargest(10, "elevation_gain")[
+                ["start_date","name","distance_km","elevation_gain",
+                 "elev_km","pace_sec_km","gap_sec","vert_pace"]].copy()
+            top10["Data"]      = top10["start_date"].dt.strftime("%d/%m/%Y")
+            top10["Pace"]      = fmt_pace_vec(top10["pace_sec_km"])
+            top10["GAP"]       = fmt_pace_vec(top10["gap_sec"])
+            top10["Elev/km"]   = top10["elev_km"].apply(lambda x: f"{x:.1f}")
+            top10["Distância"] = top10["distance_km"].apply(lambda x: f"{x:.1f} km")
+            top10["Elevação"]  = top10["elevation_gain"].apply(lambda x: f"{x:.0f} m")
+            top10["Pace Vert"] = top10["vert_pace"].apply(
+                lambda x: f"{x:.0f} m/h" if pd.notna(x) else "—")
+            st.dataframe(
+                top10[["Data","name","Distância","Elevação","Elev/km","Pace","GAP","Pace Vert"]]
+                    .rename(columns={"name": "Atividade"}),
+                hide_index=True, use_container_width=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  3 · CARGA & ZONAS  —  gestão de carga + fisiologia cardíaca
