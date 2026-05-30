@@ -472,6 +472,56 @@ int_opts = [i for i in INTENSITY_ORDER
 sel_int  = st.sidebar.multiselect("Filtrar Intensidade", int_opts, default=int_opts)
 
 st.sidebar.markdown("---")
+_test_3k_default = st.session_state.get("test_3k_str", "3:28")
+TEST_3K_STR = st.sidebar.text_input(
+    "🏁 Pace do Teste 3km (MM:SS)",
+    value=_test_3k_default,
+    key="test_3k_str",
+    help="Pace médio do seu último teste de 3km. "
+         "Define as zonas de intensidade do treinador no gráfico de laps."
+)
+def _parse_test_3k(s):
+    """Converte MM:SS → segundos/km. Retorna None se inválido."""
+    try:
+        parts = s.strip().split(":")
+        if len(parts) == 2:
+            return int(parts[0]) * 60 + int(parts[1])
+        elif len(parts) == 3:      # HH:MM:SS
+            return int(parts[1]) * 60 + int(parts[2])
+    except Exception:
+        pass
+    return None
+
+TEST_3K_SEC = _parse_test_3k(TEST_3K_STR)
+if TEST_3K_SEC:
+    st.sidebar.caption(
+        f"Zonas ativas para teste {TEST_3K_STR}/km  ·  "
+        f"Trote ≥ {TEST_3K_SEC+80}s · Leve {TEST_3K_SEC+50}–{TEST_3K_SEC+60}s · "
+        f"Forte {TEST_3K_SEC+15}–{TEST_3K_SEC+20}s/km"
+    )
+else:
+    st.sidebar.warning("Formato inválido — use MM:SS (ex: 3:28)")
+    TEST_3K_SEC = None
+
+def _pace_zone(pace_sec, test_sec):
+    """Retorna (nome_zona, cor_hex) baseado no teste 3km do treinador.
+    pace_sec = pace da atividade em seg/km
+    test_sec = pace do teste 3km em seg/km
+    Escala: verde (fácil) → amarelo → laranja → vermelho (muito forte)
+    """
+    if test_sec is None:
+        return ("—", "#3498DB")
+    d = pace_sec - test_sec   # positivo = mais lento que o teste (mais fácil)
+    if   d <= 0:              return ("Muito Forte – Tiros Curtos",  "#C0392B")   # vermelho escuro
+    elif d <= 10:             return ("Muito Forte – Tiros Longos",  "#E74C3C")   # vermelho
+    elif d <= 20:             return ("Forte",                        "#E67E22")   # laranja
+    elif d <= 30:             return ("Moderado–Firme",               "#F39C12")   # âmbar
+    elif d <= 40:             return ("Moderado",                     "#F9E79F")   # amarelo claro
+    elif d <= 60:             return ("Leve",                         "#ABEBC6")   # verde claro
+    elif d <= 80:             return ("Muito Leve",                   "#2ECC71")   # verde
+    else:                     return ("Trote/Regenerativo",           "#1ABC9C")   # verde-água
+
+st.sidebar.markdown("---")
 FC_MAX = st.sidebar.number_input(
     "❤️ FC Máxima pessoal (bpm)",
     min_value=150, max_value=230,
@@ -2550,21 +2600,31 @@ with tab_hist:
                         laps_pace["Pace_fmt"] = fmt_pace_vec(laps_pace["pace_sec_km"])
                         laps_pace["Pace_min"] = laps_pace["pace_sec_km"] / 60
                         laps_pace["Lap"]      = laps_pace["lap_index"].astype(str)
-                        p50 = laps_pace["pace_sec_km"].median()
-                        laps_pace["cor"] = laps_pace["pace_sec_km"].apply(
-                            lambda x: GREEN if x < p50*0.97
-                            else RED if x > p50*1.03 else BLUE)
+                        if TEST_3K_SEC:
+                            _zones = laps_pace["pace_sec_km"].apply(
+                                lambda x: _pace_zone(x, TEST_3K_SEC))
+                            laps_pace["cor"]       = _zones.apply(lambda z: z[1])
+                            laps_pace["zona_nome"] = _zones.apply(lambda z: z[0])
+                        else:
+                            p50 = laps_pace["pace_sec_km"].median()
+                            laps_pace["cor"]       = laps_pace["pace_sec_km"].apply(
+                                lambda x: GREEN if x < p50*0.97
+                                else RED if x > p50*1.03 else BLUE)
+                            laps_pace["zona_nome"] = "—"
                         fig = go.Figure(go.Bar(
                             x=laps_pace["Lap"], y=laps_pace["Pace_min"],
                             text=laps_pace["Pace_fmt"], textposition="outside",
                             marker_color=laps_pace["cor"].tolist(),
-                            customdata=laps_pace[["distance_m","Pace_fmt"]].values,
+                            customdata=laps_pace[["distance_m","Pace_fmt","zona_nome"]].values,
                             hovertemplate="Lap %{x}<br>Pace: %{customdata[1]}/km<br>"
+                                          "Zona: %{customdata[2]}<br>"
                                           "Distância: %{customdata[0]:.0f}m<extra></extra>"))
                         set_pace_yaxis(fig, laps_pace["pace_sec_km"])
                         titulo = "⚡ Pace por Lap"
                         if n_ig > 0:
                             titulo += f" ({n_ig} micro-laps ocultados)"
+                        if TEST_3K_SEC:
+                            titulo += f"  ·  ref. teste {TEST_3K_STR}/km"
                         fig.update_layout(title=titulo, xaxis_title="Lap")
                         st.plotly_chart(fig, width="stretch")
                 with col_b:
