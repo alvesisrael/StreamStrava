@@ -515,10 +515,10 @@ def _pace_zone(pace_sec, test_sec):
     if   d <= 0:              return ("Muito Forte – Tiros Curtos",  "#C0392B")   # vermelho escuro
     elif d <= 10:             return ("Muito Forte – Tiros Longos",  "#E74C3C")   # vermelho
     elif d <= 20:             return ("Forte",                        "#E67E22")   # laranja
-    elif d <= 30:             return ("Moderado–Firme",               "#F39C12")   # âmbar
-    elif d <= 40:             return ("Moderado",                     "#F9E79F")   # amarelo claro
-    elif d <= 60:             return ("Leve",                         "#ABEBC6")   # verde claro
-    elif d <= 80:             return ("Muito Leve",                   "#2ECC71")   # verde
+    elif d <= 32:             return ("Moderado–Firme",               "#F39C12")   # âmbar
+    elif d <= 45:             return ("Moderado",                     "#F9E79F")   # amarelo claro
+    elif d <= 65:             return ("Leve",                         "#ABEBC6")   # verde claro
+    elif d <= 85:             return ("Muito Leve",                   "#2ECC71")   # verde
     else:                     return ("Trote/Regenerativo",           "#1ABC9C")   # verde-água
 
 st.sidebar.markdown("---")
