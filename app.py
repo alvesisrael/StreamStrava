@@ -1160,10 +1160,11 @@ with tab_desemp:
             # ── métricas derivadas ──────────────────────────────────────────────────
             df_e["elev_km"]   = df_e["elevation_gain"] / df_e["distance_km"]
             # Pace Vertical: metros de desnível positivo por hora de movimento
-            if "moving_time_s" in df_e.columns:
+            _mt_col = "moving_time_sec" if "moving_time_sec" in df_e.columns else                       "moving_time_s"   if "moving_time_s"   in df_e.columns else None
+            if _mt_col:
                 df_e["vert_pace"] = df_e.apply(
-                    lambda r: r["elevation_gain"] / (r["moving_time_s"] / 3600)
-                    if pd.notna(r["moving_time_s"]) and r["moving_time_s"] > 0 else np.nan, axis=1)
+                    lambda r: r["elevation_gain"] / (r[_mt_col] / 3600)
+                    if pd.notna(r[_mt_col]) and r[_mt_col] > 0 else np.nan, axis=1)
             else:
                 df_e["vert_pace"] = np.nan
             # GAP — Grade Adjusted Pace: normaliza o pace para equivalente plano
@@ -1289,8 +1290,11 @@ with tab_desemp:
                     st.info("Dados de tempo de movimento insuficientes para calcular pace vertical.")
 
             with col_e4:
-                _has_hr = "avg_hr" in df_e.columns
-                df_pfc = df_e[df_e["pace_sec_km"].notna() & (df_e["avg_hr"].notna() if _has_hr else True)].copy() if _has_hr else pd.DataFrame()
+                _hr_col = "average_heartrate" if "average_heartrate" in df_e.columns else                           "avg_hr" if "avg_hr" in df_e.columns else None
+                _has_hr = _hr_col is not None
+                df_pfc = df_e[df_e["pace_sec_km"].notna() & df_e[_hr_col].notna()].copy() if _has_hr else pd.DataFrame()
+                if _has_hr and _hr_col != "avg_hr":
+                    df_pfc = df_pfc.rename(columns={_hr_col: "avg_hr"})
                 if not df_pfc.empty:
                     df_pfc["Pace_min"] = df_pfc["pace_sec_km"] / 60
                     _zone_map = {
