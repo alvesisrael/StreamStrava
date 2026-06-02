@@ -69,90 +69,70 @@ GREEN, BLUE, AMBER, RED, PURPLE, GRAY = \
 
 # ── Groq LLM assistant ────────────────────────────────────────────────────────
 def _groq_ask(question: str, context: str, api_key: str) -> str:
-    """Envia pergunta + contexto ao Groq (llama-3.1-8b-instant) e retorna resposta."""
     import requests as _req
     if not api_key or len(api_key) < 20:
-        return "⚠️ Configure a chave API do Groq no sidebar para usar o assistente."
-
-    # ── Zonas de pace dinâmicas baseadas no teste 3km atual ──────────────────
+        return "Configure a chave API do Groq no sidebar para usar o assistente."
     _test_str = st.session_state.get("test_3k_str", "3:28")
     try:
         _tp = _test_str.strip().split(":")
-        _test_sec = int(_tp[0])*60 + int(_tp[1])
+        _test_sec = int(_tp[0]) * 60 + int(_tp[1])
     except Exception:
-        _test_sec = 208  # fallback 3:28
-    def _s2m(s): return f"{int(s)//60}:{int(s)%60:02d}"
-    _zonas_txt = (
-        f"  • Trote/Regenerativo : acima de {_s2m(_test_sec+85)}/km
-"
-        f"  • Muito Leve         : {_s2m(_test_sec+65)}–{_s2m(_test_sec+85)}/km
-"
-        f"  • Leve               : {_s2m(_test_sec+45)}–{_s2m(_test_sec+65)}/km
-"
-        f"  • Moderado           : {_s2m(_test_sec+32)}–{_s2m(_test_sec+45)}/km
-"
-        f"  • Moderado–Firme     : {_s2m(_test_sec+20)}–{_s2m(_test_sec+32)}/km
-"
-        f"  • Forte              : {_s2m(_test_sec+10)}–{_s2m(_test_sec+20)}/km
-"
-        f"  • Muito Forte Longos : {_test_str}–{_s2m(_test_sec+10)}/km
-"
-        f"  • Muito Forte Curtos : abaixo de {_test_str}/km"
+        _test_sec = 208
+    def _s2m(s):
+        s = int(s); return str(s // 60) + ":" + str(s % 60).zfill(2)
+    _zonas = (
+        "Trote/Regenerativo: acima de " + _s2m(_test_sec+85) + "/km\n"
+        + "Muito Leve: " + _s2m(_test_sec+65) + " a " + _s2m(_test_sec+85) + "/km\n"
+        + "Leve: " + _s2m(_test_sec+45) + " a " + _s2m(_test_sec+65) + "/km\n"
+        + "Moderado: " + _s2m(_test_sec+32) + " a " + _s2m(_test_sec+45) + "/km\n"
+        + "Moderado-Firme: " + _s2m(_test_sec+20) + " a " + _s2m(_test_sec+32) + "/km\n"
+        + "Forte: " + _s2m(_test_sec+10) + " a " + _s2m(_test_sec+20) + "/km\n"
+        + "Muito Forte Tiros Longos: " + _test_str + " a " + _s2m(_test_sec+10) + "/km\n"
+        + "Muito Forte Tiros Curtos: abaixo de " + _test_str + "/km"
     )
-
-    _system = f"""Você é o assistente de treino do Israel, corredor brasileiro com perfil de corrida de estrada e trail running.
-
-PERFIL DO ATLETA:
-- Nome: Israel
-- Nível: intermediário-avançado, treina sério há ~18 meses com assessoria esportiva
-- Especialidade atual: corrida de rua e montanha (trail running)
-- Treinador: especialista em montanha na região
-- Próxima prova alvo: Paulo Lopes Trail Run 21K — 01/08/2026
-  · Distância: 20,4 km · D+: 1.354 m · 5 subidas principais · pico em 498m no km 10
-  · Maior subida: S3 (km 6,3→10,1) = 3,8 km / +463m / 12,2% médio
-  · Subida mais dura no final: S5 (km 17→18) = +185m / 17,7% médio
-- Semanas até a prova: ~8 semanas a partir de junho/2026
-
-TESTE DE 3KM MAIS RECENTE: {_test_str}/km
-ZONAS DE PACE (baseadas no teste, tabela do treinador):
-{_zonas_txt}
-
-MÉTRICAS PRINCIPAIS DO APP (para interpretar os dados):
-- CTL (Chronic Training Load): fitness acumulado 42 dias. Meta pré-prova: 55–70
-- ATL (Acute Training Load): fadiga dos últimos 7 dias
-- TSB (Training Stress Balance) = CTL − ATL: forma atual
-  · +5 a +20 = janela de pico (ideal para prova)
-  · 0 a +5 = neutro
-  · Abaixo de −15 = fatigado, risco de overtraining
-- ACWR: ratio carga aguda/crônica. Zona segura: 0,8–1,3. Acima de 1,5 = risco de lesão
-- Pace Vertical: metros de desnível por hora. Quanto maior, mais eficiente nas subidas
-- GAP (Grade Adjusted Pace): pace normalizado para terreno plano equivalente
-- Cadência ideal: 175–185 spm. Abaixo de 170 = passada longa, risco de lesão
-- Deriva cardíaca: diferença FC início vs fim do treino. Acima de 10 bpm = atenção
-
-PRINCÍPIOS DE TREINO RELEVANTES:
-- Regra 80/20: 80% do volume em intensidade leve, 20% em alta intensidade
-- Para montanha: a FC manda nas subidas, não o pace
-- Caminhada em subidas >20% é técnica, não fraqueza
-- Progressão segura: máximo 10% de aumento de volume por semana
-
-ESTILO DE RESPOSTA:
-- SEMPRE em português brasileiro
-- Direto, prático e motivador — como um bom treinador faria
-- Use os dados fornecidos na pergunta para responder de forma específica e personalizada
-- Seja honesto: se algo estiver errado, diga claramente mas de forma construtiva
-- Máximo 4 parágrafos objetivos. Sem enrolação.
-- Quando relevante, mencione a prova de 01/08 como referência temporal
-"""
+    _system = (
+        "Voce e o assistente de treino do Israel, corredor brasileiro de rua e trail running.\n\n"
+        "PERFIL DO ATLETA:\n"
+        "- Nome: Israel\n"
+        "- Nivel: intermediario-avancado, treina ha ~18 meses com assessoria esportiva\n"
+        "- Treinador: especialista em montanha na regiao\n"
+        "- Proximo objetivo: Paulo Lopes Trail Run 21K em 01/08/2026\n"
+        "  Percurso: 20,4 km / 1.354 m D+ / 5 blocos de subida\n"
+        "  Maior subida: S3 (km 6,3-10,1) = 3,8 km / +463 m / 12% medio\n"
+        "  Subida final: S5 (km 17-18) = +185 m / 17,7% medio\n\n"
+        "TESTE DE 3KM: " + _test_str + "/km\n"
+        "ZONAS DE PACE DO TREINADOR:\n" + _zonas + "\n\n"
+        "METRICAS DO APP:\n"
+        "- CTL: fitness acumulado 42 dias. Meta pre-prova: 55-70\n"
+        "- ATL: fadiga 7 dias. TSB = CTL - ATL: forma atual\n"
+        "- TSB +5 a +20 = janela de pico; abaixo de -15 = fatigado\n"
+        "- ACWR zona segura 0,8-1,3. Acima de 1,5 = risco de lesao\n"
+        "- Pace Vertical: metros de desnivel/hora. Quanto maior melhor para montanha\n"
+        "- GAP: pace ajustado para terreno plano equivalente\n"
+        "- Cadencia ideal 175-185 spm. Abaixo de 170 = passada longa, risco de lesao\n"
+        "- Deriva cardiaca acima de 10 bpm = sinal de fadiga ou desidratacao\n\n"
+        "PRINCIPIOS DE TREINO:\n"
+        "- Regra 80/20: 80% volume em intensidade leve, 20% em alta intensidade\n"
+        "- Em montanha: FC manda nas subidas, nao o pace\n"
+        "- Caminhar subidas acima de 20% e tecnica, nao fraqueza\n"
+        "- Progressao segura: maximo 10% de aumento de volume por semana\n\n"
+        "ESTILO DE RESPOSTA:\n"
+        "- SEMPRE em portugues brasileiro\n"
+        "- Direto, pratico e motivador como um bom treinador\n"
+        "- Use os dados fornecidos para respostas especificas e personalizadas\n"
+        "- Honesto: se algo estiver errado, diga claramente mas de forma construtiva\n"
+        "- Maximo 4 paragrafos objetivos. Sem enrolacao.\n"
+        "- Quando relevante, mencione a prova de 01/08 como referencia temporal."
+    )
     try:
         _resp = _req.post(
             "https://api.groq.com/openai/v1/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            headers={"Authorization": "Bearer " + api_key, "Content-Type": "application/json"},
             json={
                 "model": "llama-3.1-8b-instant",
                 "messages": [
                     {"role": "system", "content": _system},
-                    {"role": "user", "content": f"Dados do meu treino (período atual):\n{context}\n\nPergunta: {question}"}
+                    {"role": "user",   "content": "Dados do meu treino:\n" + context + "\n\nPergunta: " + question}
                 ],
                 "max_tokens": 700,
                 "temperature": 0.65
@@ -162,57 +142,24 @@ ESTILO DE RESPOSTA:
         _resp.raise_for_status()
         return _resp.json()["choices"][0]["message"]["content"]
     except _req.exceptions.Timeout:
-        return "⏱️ Timeout — tente novamente em alguns segundos."
+        return "Timeout — tente novamente em alguns segundos."
     except Exception as _ex:
-        return f"❌ Erro ao contatar Groq: {_ex}"
+        return "Erro ao contatar Groq: " + str(_ex)
 
 def _groq_widget(tab_name: str, context: str, key_suffix: str):
-    """Widget reutilizável do assistente. Chama _groq_ask com o contexto da aba."""
     with st.expander("🤖 Assistente de Treino — pergunte sobre esses dados", expanded=False):
         _q = st.text_input(
-            "Sua pergunta:", placeholder="Ex: Como estou? O que devo melhorar? Estou pronto para a prova?",
-            key=f"groq_q_{key_suffix}", label_visibility="collapsed"
+            "Sua pergunta:",
+            placeholder="Ex: Como estou? O que devo melhorar? Estou pronto para a prova?",
+            key="groq_q_" + key_suffix, label_visibility="collapsed"
         )
-        if st.button("Perguntar ▶", key=f"groq_btn_{key_suffix}"):
+        if st.button("Perguntar ▶", key="groq_btn_" + key_suffix):
             if _q.strip():
                 with st.spinner("Consultando assistente..."):
                     _ans = _groq_ask(_q, context, GROQ_KEY)
-                st.session_state[f"groq_ans_{key_suffix}"] = _ans
-        if f"groq_ans_{key_suffix}" in st.session_state:
-            st.markdown(st.session_state[f"groq_ans_{key_suffix}"])
-
-MESES_PT = {"Jan":"jan","Feb":"fev","Mar":"mar","Apr":"abr","May":"mai",
-            "Jun":"jun","Jul":"jul","Aug":"ago","Sep":"set","Oct":"out",
-            "Nov":"nov","Dec":"dez"}
-DIAS_PT  = {"Monday":"Seg","Tuesday":"Ter","Wednesday":"Qua",
-            "Thursday":"Qui","Friday":"Sex","Saturday":"Sáb","Sunday":"Dom"}
-DIAS_ORDER_PT = ["Seg","Ter","Qua","Qui","Sex","Sáb","Dom"]
-
-# Zonas fáceis — usado em calc_intensidade_fc (módulo-level, não recriado por chamada)
-_ZONAS_FACEIS_REL = {"Z1", "Z2", "Sem FC"}
-
-# FC_MAX padrão — sobrescrito pelo sidebar
-FC_MAX = 195
-
-KEYWORDS_INTENSIDADE = {
-    "Muito Forte": ["intervalad","tiro","interval","vo2","muito forte",
-                    "repetição","repeticao","série","serie","prova","teste"],
-    "Forte":       ["fartlek","forte","threshold","limiar"],
-    "Moderado Firme": ["progressiv","ritmado","moderado firme","tempo run"],
-    "Moderado":    ["longo","moderado","moder","base","contínuo","continuo",
-                    "aeróbic","aerobic"],
-    "Leve":        ["regenerat","fácil","facil","easy","recovery",
-                    "leve","caminhad","walk","solto"],
-}
-
-# ── Regex pré-compilados (uma vez no startup, reutilizados em cada chamada) ───
-_KW_COMPILED: dict[str, re.Pattern] = {
-    intensity: re.compile(
-        "|".join(re.escape(kw) for kw in kws), re.IGNORECASE
-    )
-    for intensity, kws in KEYWORDS_INTENSIDADE.items()
-}
-
+                st.session_state["groq_ans_" + key_suffix] = _ans
+        if ("groq_ans_" + key_suffix) in st.session_state:
+            st.markdown(st.session_state["groq_ans_" + key_suffix])
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def mesano_pt(dt_series):
