@@ -73,13 +73,77 @@ def _groq_ask(question: str, context: str, api_key: str) -> str:
     import requests as _req
     if not api_key or len(api_key) < 20:
         return "⚠️ Configure a chave API do Groq no sidebar para usar o assistente."
-    _system = (
-        "Você é um assistente especializado em análise de treinos de corrida e trail running. "
-        "Responda SEMPRE em português brasileiro, de forma direta, prática e motivadora. "
-        "Use os dados fornecidos para dar insights personalizados e específicos. "
-        "Seja como um treinador experiente: honesto, técnico quando necessário, mas acessível. "
-        "Limite a resposta a no máximo 4 parágrafos curtos."
+
+    # ── Zonas de pace dinâmicas baseadas no teste 3km atual ──────────────────
+    _test_str = st.session_state.get("test_3k_str", "3:28")
+    try:
+        _tp = _test_str.strip().split(":")
+        _test_sec = int(_tp[0])*60 + int(_tp[1])
+    except Exception:
+        _test_sec = 208  # fallback 3:28
+    def _s2m(s): return f"{int(s)//60}:{int(s)%60:02d}"
+    _zonas_txt = (
+        f"  • Trote/Regenerativo : acima de {_s2m(_test_sec+85)}/km
+"
+        f"  • Muito Leve         : {_s2m(_test_sec+65)}–{_s2m(_test_sec+85)}/km
+"
+        f"  • Leve               : {_s2m(_test_sec+45)}–{_s2m(_test_sec+65)}/km
+"
+        f"  • Moderado           : {_s2m(_test_sec+32)}–{_s2m(_test_sec+45)}/km
+"
+        f"  • Moderado–Firme     : {_s2m(_test_sec+20)}–{_s2m(_test_sec+32)}/km
+"
+        f"  • Forte              : {_s2m(_test_sec+10)}–{_s2m(_test_sec+20)}/km
+"
+        f"  • Muito Forte Longos : {_test_str}–{_s2m(_test_sec+10)}/km
+"
+        f"  • Muito Forte Curtos : abaixo de {_test_str}/km"
     )
+
+    _system = f"""Você é o assistente de treino do Israel, corredor brasileiro com perfil de corrida de estrada e trail running.
+
+PERFIL DO ATLETA:
+- Nome: Israel
+- Nível: intermediário-avançado, treina sério há ~18 meses com assessoria esportiva
+- Especialidade atual: corrida de rua e montanha (trail running)
+- Treinador: especialista em montanha na região
+- Próxima prova alvo: Paulo Lopes Trail Run 21K — 01/08/2026
+  · Distância: 20,4 km · D+: 1.354 m · 5 subidas principais · pico em 498m no km 10
+  · Maior subida: S3 (km 6,3→10,1) = 3,8 km / +463m / 12,2% médio
+  · Subida mais dura no final: S5 (km 17→18) = +185m / 17,7% médio
+- Semanas até a prova: ~8 semanas a partir de junho/2026
+
+TESTE DE 3KM MAIS RECENTE: {_test_str}/km
+ZONAS DE PACE (baseadas no teste, tabela do treinador):
+{_zonas_txt}
+
+MÉTRICAS PRINCIPAIS DO APP (para interpretar os dados):
+- CTL (Chronic Training Load): fitness acumulado 42 dias. Meta pré-prova: 55–70
+- ATL (Acute Training Load): fadiga dos últimos 7 dias
+- TSB (Training Stress Balance) = CTL − ATL: forma atual
+  · +5 a +20 = janela de pico (ideal para prova)
+  · 0 a +5 = neutro
+  · Abaixo de −15 = fatigado, risco de overtraining
+- ACWR: ratio carga aguda/crônica. Zona segura: 0,8–1,3. Acima de 1,5 = risco de lesão
+- Pace Vertical: metros de desnível por hora. Quanto maior, mais eficiente nas subidas
+- GAP (Grade Adjusted Pace): pace normalizado para terreno plano equivalente
+- Cadência ideal: 175–185 spm. Abaixo de 170 = passada longa, risco de lesão
+- Deriva cardíaca: diferença FC início vs fim do treino. Acima de 10 bpm = atenção
+
+PRINCÍPIOS DE TREINO RELEVANTES:
+- Regra 80/20: 80% do volume em intensidade leve, 20% em alta intensidade
+- Para montanha: a FC manda nas subidas, não o pace
+- Caminhada em subidas >20% é técnica, não fraqueza
+- Progressão segura: máximo 10% de aumento de volume por semana
+
+ESTILO DE RESPOSTA:
+- SEMPRE em português brasileiro
+- Direto, prático e motivador — como um bom treinador faria
+- Use os dados fornecidos na pergunta para responder de forma específica e personalizada
+- Seja honesto: se algo estiver errado, diga claramente mas de forma construtiva
+- Máximo 4 parágrafos objetivos. Sem enrolação.
+- Quando relevante, mencione a prova de 01/08 como referência temporal
+"""
     try:
         _resp = _req.post(
             "https://api.groq.com/openai/v1/chat/completions",
@@ -1418,17 +1482,16 @@ with tab_desemp:
                 hide_index=True, use_container_width=True)
 
     # ── Assistente IA ─────────────────────────────────────────────────────────
-    _pr_5k  = melhor_5k()  if callable(melhor_5k)  else "N/A"
-    _pr_10k = melhor_10k() if callable(melhor_10k) else "N/A"
     _ctx_desemp = (
         f"Período analisado: {s_dt.date()} a {e_dt.date()}\n"
-        f"Melhor pace 5K: {_pr_5k}\n"
-        f"Melhor pace 10K: {_pr_10k}\n"
+        f"Melhor pace 5K: {melhor_be('5k')}\n"
+        f"Melhor pace 10K: {melhor_be('10k')}\n"
+        f"Melhor 3km: {melhor_3km()}\n"
         f"Total de atividades: {len(df_run)}\n"
         f"Distância total: {df_run['distance_km'].sum():.1f} km\n"
         f"Pace médio: {fmt_pace(df_run['pace_sec_km'].mean()) if df_run['pace_sec_km'].notna().any() else 'N/A'}/km\n"
-        f"Cadência média: {df_run['average_cadence'].mean()*2:.0f} spm\n" if "average_cadence" in df_run.columns and df_run["average_cadence"].notna().any() else ""
-        f"FC média: {df_run['average_heartrate'].mean():.0f} bpm\n" if df_run["average_heartrate"].notna().any() else ""
+        + (f"Cadência média: {df_run['average_cadence'].mean()*2:.0f} spm\n" if "average_cadence" in df_run.columns and df_run["average_cadence"].notna().any() else "")
+        + (f"FC média: {df_run['average_heartrate'].mean():.0f} bpm\n" if "average_heartrate" in df_run.columns and df_run["average_heartrate"].notna().any() else "")
     )
     _groq_widget("Desempenho", _ctx_desemp, "desemp")
 
