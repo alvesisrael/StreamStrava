@@ -2826,6 +2826,114 @@ with tab_hist:
                 st.dataframe(df_laps_tab.rename(columns=cols_lap),
                              hide_index=True, width="stretch")
 
+                # ── Assistente de Atividade ───────────────────────────────────
+                st.markdown("---")
+                st.markdown("#### 🤖 Pergunte sobre este treino")
+
+                # Monta contexto rico com TODOS os dados disponíveis do treino
+                def _build_activity_context(act_info, laps_ativ, df_run):
+                    lines = []
+                    lines.append(f"TREINO: {act_info['name']}")
+                    lines.append(f"Data: {act_info['start_date'].strftime('%d/%m/%Y %H:%M')}")
+                    lines.append(f"Distância: {act_info['distance_km']:.2f} km")
+                    lines.append(f"Pace médio: {fmt_pace(act_info['pace_sec_km'])}/km")
+
+                    if pd.notna(act_info.get("moving_time_sec")):
+                        t = int(act_info["moving_time_sec"])
+                        lines.append(f"Tempo total: {t//3600}h{(t%3600)//60:02d}min")
+
+                    if pd.notna(act_info.get("average_heartrate")):
+                        lines.append(f"FC média: {act_info['average_heartrate']:.0f} bpm")
+                    if pd.notna(act_info.get("max_heartrate")):
+                        lines.append(f"FC máxima: {act_info['max_heartrate']:.0f} bpm")
+                    if pd.notna(act_info.get("elevation_gain")):
+                        lines.append(f"Elevação total: {act_info['elevation_gain']:.0f} m")
+                    if pd.notna(act_info.get("average_cadence")):
+                        lines.append(f"Cadência média: {act_info['average_cadence']*2:.0f} spm")
+                    if pd.notna(act_info.get("calories")):
+                        lines.append(f"Calorias: {act_info['calories']:.0f} kcal")
+                    if pd.notna(act_info.get("suffer_score")):
+                        lines.append(f"Suffer Score: {act_info['suffer_score']:.0f}")
+
+                    # Clima
+                    if pd.notna(act_info.get("weather_temp")):
+                        lines.append(f"Temperatura: {act_info['weather_temp']:.1f}°C"
+                                     + (f" (sensação {act_info['weather_feels_like']:.1f}°C)"
+                                        if pd.notna(act_info.get("weather_feels_like")) else ""))
+                    if pd.notna(act_info.get("weather_humidity")):
+                        lines.append(f"Umidade: {act_info['weather_humidity']:.0f}%")
+                    if pd.notna(act_info.get("weather_condition")):
+                        lines.append(f"Condição: {act_info['weather_condition']}")
+
+                    # Laps detalhados
+                    if not laps_ativ.empty:
+                        lines.append("\nDETALHE POR LAP (" + str(len(laps_ativ)) + " laps):")
+                        for _, lap in laps_ativ.iterrows():
+                            lap_line = f"  Lap {int(lap['lap_index'])}: "
+                            parts = []
+                            if pd.notna(lap.get("distance_m")):
+                                parts.append(f"{lap['distance_m']:.0f}m")
+                            if pd.notna(lap.get("pace_sec_km")):
+                                zona = _pace_zone(lap["pace_sec_km"], TEST_3K_SEC)[0] if TEST_3K_SEC else ""
+                                parts.append(f"pace {fmt_pace(lap['pace_sec_km'])}/km ({zona})")
+                            if pd.notna(lap.get("average_heartrate")):
+                                parts.append(f"FC {lap['average_heartrate']:.0f} bpm")
+                            if pd.notna(lap.get("max_heartrate")):
+                                parts.append(f"FCmax {lap['max_heartrate']:.0f}")
+                            if pd.notna(lap.get("total_elevation_gain")):
+                                parts.append(f"elev +{lap['total_elevation_gain']:.0f}m")
+                            if pd.notna(lap.get("average_cadence")):
+                                parts.append(f"cad {lap['average_cadence']*2:.0f}spm")
+                            lap_line += " | ".join(parts)
+                            lines.append(lap_line)
+
+                    # Comparação com treinos similares (mesma distância ±20%)
+                    dist = float(act_info["distance_km"])
+                    similares = df_run[
+                        (df_run["id"] != act_info["id"]) &
+                        (df_run["distance_km"].between(dist * 0.8, dist * 1.2)) &
+                        df_run["pace_sec_km"].notna()
+                    ].sort_values("start_date", ascending=False).head(5)
+
+                    if not similares.empty:
+                        lines.append("\nCOMPARAÇÃO — últimos treinos similares ("
+                                     + f"{dist*0.8:.1f}"
+                                     + "–"
+                                     + f"{dist*1.2:.1f}"
+                                     + " km):")
+                        for _, s in similares.iterrows():
+                            s_line = (f"  {s['start_date'].strftime('%d/%m/%y')}: "
+                                      f"{s['distance_km']:.1f}km · {fmt_pace(s['pace_sec_km'])}/km")
+                            if pd.notna(s.get("average_heartrate")):
+                                s_line += f" · FC {s['average_heartrate']:.0f}"
+                            if pd.notna(s.get("elevation_gain")):
+                                s_line += f" · elev {s['elevation_gain']:.0f}m"
+                            lines.append(s_line)
+
+                        # Evolução de pace vs média dos similares
+                        pace_atual = float(act_info["pace_sec_km"])
+                        pace_medio_sim = similares["pace_sec_km"].mean()
+                        diff = pace_medio_sim - pace_atual
+                        sinal = "mais rápido" if diff > 0 else "mais lento"
+                        lines.append(f"  → Este treino foi {abs(diff):.0f}s/km {sinal} que a média dos similares")
+
+                    return "\n".join(lines)
+
+                _ctx_ativ = _build_activity_context(act_info, laps_ativ, df_run)
+
+                _q_ativ = st.text_input(
+                    "Pergunta sobre este treino:",
+                    placeholder="Ex: Como foi minha FC neste treino? Os laps foram consistentes? Melhorei em relação a treinos parecidos?",
+                    key=f"groq_q_ativ_{ativ_selecionada}"
+                )
+                if st.button("Perguntar sobre este treino ▶", key=f"groq_btn_ativ_{ativ_selecionada}"):
+                    if _q_ativ.strip():
+                        with st.spinner("Analisando seu treino..."):
+                            _ans_ativ = _groq_ask(_q_ativ, _ctx_ativ, GROQ_KEY)
+                        st.session_state[f"groq_ans_ativ_{ativ_selecionada}"] = _ans_ativ
+                if f"groq_ans_ativ_{ativ_selecionada}" in st.session_state:
+                    st.markdown(st.session_state[f"groq_ans_ativ_{ativ_selecionada}"])
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  6 · SUGERIR ROTA  — recomendação baseada em histórico + ORS (novo)
