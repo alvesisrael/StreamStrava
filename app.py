@@ -67,6 +67,56 @@ ZONA_ORDER = ["Sem FC","Z1 - Regenerativo","Z2 - Aeróbico",
 GREEN, BLUE, AMBER, RED, PURPLE, GRAY = \
     "#2ECC71","#3498DB","#F39C12","#E74C3C","#9B59B6","#95A5A6"
 
+# ── Groq LLM assistant ────────────────────────────────────────────────────────
+def _groq_ask(question: str, context: str, api_key: str) -> str:
+    """Envia pergunta + contexto ao Groq (llama-3.1-8b-instant) e retorna resposta."""
+    import requests as _req
+    if not api_key or len(api_key) < 20:
+        return "⚠️ Configure a chave API do Groq no sidebar para usar o assistente."
+    _system = (
+        "Você é um assistente especializado em análise de treinos de corrida e trail running. "
+        "Responda SEMPRE em português brasileiro, de forma direta, prática e motivadora. "
+        "Use os dados fornecidos para dar insights personalizados e específicos. "
+        "Seja como um treinador experiente: honesto, técnico quando necessário, mas acessível. "
+        "Limite a resposta a no máximo 4 parágrafos curtos."
+    )
+    try:
+        _resp = _req.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={
+                "model": "llama-3.1-8b-instant",
+                "messages": [
+                    {"role": "system", "content": _system},
+                    {"role": "user", "content": f"Dados do meu treino (período atual):\n{context}\n\nPergunta: {question}"}
+                ],
+                "max_tokens": 700,
+                "temperature": 0.65
+            },
+            timeout=30
+        )
+        _resp.raise_for_status()
+        return _resp.json()["choices"][0]["message"]["content"]
+    except _req.exceptions.Timeout:
+        return "⏱️ Timeout — tente novamente em alguns segundos."
+    except Exception as _ex:
+        return f"❌ Erro ao contatar Groq: {_ex}"
+
+def _groq_widget(tab_name: str, context: str, key_suffix: str):
+    """Widget reutilizável do assistente. Chama _groq_ask com o contexto da aba."""
+    with st.expander("🤖 Assistente de Treino — pergunte sobre esses dados", expanded=False):
+        _q = st.text_input(
+            "Sua pergunta:", placeholder="Ex: Como estou? O que devo melhorar? Estou pronto para a prova?",
+            key=f"groq_q_{key_suffix}", label_visibility="collapsed"
+        )
+        if st.button("Perguntar ▶", key=f"groq_btn_{key_suffix}"):
+            if _q.strip():
+                with st.spinner("Consultando assistente..."):
+                    _ans = _groq_ask(_q, context, GROQ_KEY)
+                st.session_state[f"groq_ans_{key_suffix}"] = _ans
+        if f"groq_ans_{key_suffix}" in st.session_state:
+            st.markdown(st.session_state[f"groq_ans_{key_suffix}"])
+
 MESES_PT = {"Jan":"jan","Feb":"fev","Mar":"mar","Apr":"abr","May":"mai",
             "Jun":"jun","Jul":"jul","Aug":"ago","Sep":"set","Oct":"out",
             "Nov":"nov","Dec":"dez"}
@@ -522,6 +572,15 @@ def _pace_zone(pace_sec, test_sec):
     else:                     return ("Trote/Regenerativo",           "#1ABC9C")   # verde-água
 
 st.sidebar.markdown("---")
+GROQ_KEY = st.sidebar.text_input(
+    "🤖 Groq API Key",
+    value=st.session_state.get("groq_key_val", ""),
+    type="password",
+    key="groq_key_val",
+    help="Chave da API Groq (console.groq.com). Necessária para o Assistente de Treino em cada aba."
+)
+
+st.sidebar.markdown("---")
 FC_MAX = st.sidebar.number_input(
     "❤️ FC Máxima pessoal (bpm)",
     min_value=150, max_value=230,
@@ -905,6 +964,19 @@ with tab_hoje:
         if   _streak_atual >= 8: st.success(f"🔥 {_streak_atual} semanas consecutivas! Consistência de elite.")
         elif _streak_atual >= 4: st.info(f"💪 {_streak_atual} semanas em sequência — hábito sólido.")
         elif _streak_atual == 0: st.warning("⚠️ Sequência interrompida. Que tal retomar esta semana?")
+
+    # ── Assistente IA ─────────────────────────────────────────────────────────
+    _ctx_dash = (
+        f"Período: {s_dt.date()} a {e_dt.date()}\n"
+        f"Atividades: {len(df_run)} corridas\n"
+        f"Distância total: {df_run['distance_km'].sum():.1f} km\n"
+        f"Pace médio: {fmt_pace(df_run['pace_sec_km'].mean()) if df_run['pace_sec_km'].notna().any() else 'N/A'}\n"
+        f"FC média: {df_run['average_heartrate'].mean():.0f} bpm\n"
+        + (f"ACWR (7d): {ult7d['distance_km'].sum() / max(1, _runs_raw[(hoje-timedelta(days=35)<=_runs_raw['start_date']) & (_runs_raw['start_date']<hoje-timedelta(days=7))]['distance_km'].sum()/4):.2f}\n" if not ult7d.empty else "")
+        + f"KM últimos 7 dias: {ult7d['distance_km'].sum():.1f} km\n"
+        f"Mês atual (KM): {df_run[df_run['start_date'].dt.month == hoje.month]['distance_km'].sum():.1f} km\n"
+    )
+    _groq_widget("Dashboard", _ctx_dash, "dash")
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  2 · DESEMPENHO  —  PRs, pace, eficiência, condições
@@ -1345,6 +1417,21 @@ with tab_desemp:
                     .rename(columns={"name": "Atividade"}),
                 hide_index=True, use_container_width=True)
 
+    # ── Assistente IA ─────────────────────────────────────────────────────────
+    _pr_5k  = melhor_5k()  if callable(melhor_5k)  else "N/A"
+    _pr_10k = melhor_10k() if callable(melhor_10k) else "N/A"
+    _ctx_desemp = (
+        f"Período analisado: {s_dt.date()} a {e_dt.date()}\n"
+        f"Melhor pace 5K: {_pr_5k}\n"
+        f"Melhor pace 10K: {_pr_10k}\n"
+        f"Total de atividades: {len(df_run)}\n"
+        f"Distância total: {df_run['distance_km'].sum():.1f} km\n"
+        f"Pace médio: {fmt_pace(df_run['pace_sec_km'].mean()) if df_run['pace_sec_km'].notna().any() else 'N/A'}/km\n"
+        f"Cadência média: {df_run['average_cadence'].mean()*2:.0f} spm\n" if "average_cadence" in df_run.columns and df_run["average_cadence"].notna().any() else ""
+        f"FC média: {df_run['average_heartrate'].mean():.0f} bpm\n" if df_run["average_heartrate"].notna().any() else ""
+    )
+    _groq_widget("Desempenho", _ctx_desemp, "desemp")
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  3 · CARGA & ZONAS  —  gestão de carga + fisiologia cardíaca
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1677,6 +1764,25 @@ with tab_carga:
                 st.plotly_chart(fig, width="stretch")
                 st.caption("FC em queda na mesma intensidade = adaptação cardiovascular positiva.")
 
+
+    # ── Assistente IA ─────────────────────────────────────────────────────────
+    if not pmc_raw.empty:
+        _pmc_last = pmc_raw.iloc[-1]
+        _ctl_v = float(_pmc_last.get("CTL", 0))
+        _atl_v = float(_pmc_last.get("ATL", 0))
+        _tsb_v = float(_pmc_last.get("TSB", 0))
+    else:
+        _ctl_v = _atl_v = _tsb_v = 0
+    _ctx_carga = (
+        f"Período: {s_dt.date()} a {e_dt.date()}\n"
+        f"CTL (fitness): {_ctl_v:.0f}\n"
+        f"ATL (fadiga): {_atl_v:.0f}\n"
+        f"TSB (forma): {_tsb_v:.0f} {'(Forma — pronto pra prova!)' if 5<=_tsb_v<=20 else '(Fatigado)' if _tsb_v < -15 else '(Neutro)'}\n"
+        f"Volume últimas 4 semanas: {df_run[df_run['start_date'] >= pd.Timestamp.now()-timedelta(days=28)]['distance_km'].sum():.0f} km\n"
+        f"Número de atividades no período: {len(df_run)}\n"
+        f"FC média: {df_run['average_heartrate'].mean():.0f} bpm\n" if df_run["average_heartrate"].notna().any() else ""
+    )
+    _groq_widget("Carga & Zonas", _ctx_carga, "carga")
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  4 · MAPA  — rotas com análise por lap (bloco mantido)
