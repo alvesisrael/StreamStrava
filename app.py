@@ -162,6 +162,10 @@ def _groq_widget(tab_name: str, context: str, key_suffix: str):
             st.markdown(st.session_state["groq_ans_" + key_suffix])
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+MESES_PT = {"Jan":"jan","Feb":"fev","Mar":"mar","Apr":"abr","May":"mai",
+            "Jun":"jun","Jul":"jul","Aug":"ago","Sep":"set","Oct":"out",
+            "Nov":"nov","Dec":"dez"}
+
 def mesano_pt(dt_series):
     return dt_series.dt.strftime("%b %Y").apply(
         lambda x: f"{MESES_PT.get(x[:3], x[:3])} {x[4:]}" if isinstance(x, str) and len(x) >= 4 else "")
