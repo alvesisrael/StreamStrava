@@ -164,7 +164,7 @@ def _groq_widget(tab_name: str, context: str, key_suffix: str):
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def mesano_pt(dt_series):
     return dt_series.dt.strftime("%b %Y").apply(
-        lambda x: f"{MESES_PT.get(x[:3], x[:3])} {x[4:]}")
+        lambda x: f"{MESES_PT.get(x[:3], x[:3])} {x[4:]}" if isinstance(x, str) and len(x) >= 4 else "")
 
 def normalize_dt(col):
     return pd.to_datetime(col, dayfirst=True, errors="coerce", utc=True).dt.tz_convert(None)
