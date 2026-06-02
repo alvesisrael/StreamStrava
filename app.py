@@ -161,6 +161,36 @@ def _groq_widget(tab_name: str, context: str, key_suffix: str):
         if ("groq_ans_" + key_suffix) in st.session_state:
             st.markdown(st.session_state["groq_ans_" + key_suffix])
 
+DIAS_PT  = {"Monday":"Seg","Tuesday":"Ter","Wednesday":"Qua",
+            "Thursday":"Qui","Friday":"Sex","Saturday":"Sáb","Sunday":"Dom"}
+DIAS_ORDER_PT = ["Seg","Ter","Qua","Qui","Sex","Sáb","Dom"]
+
+MESES_PT = {"Jan":"jan","Feb":"fev","Mar":"mar","Apr":"abr","May":"mai",
+            "Jun":"jun","Jul":"jul","Aug":"ago","Sep":"set","Oct":"out",
+            "Nov":"nov","Dec":"dez"}
+
+# Zonas fáceis — usado em calc_intensidade_fc
+_ZONAS_FACEIS_REL = {"Z1", "Z2", "Sem FC"}
+
+KEYWORDS_INTENSIDADE = {
+    "Muito Forte":    ["intervalad","tiro","interval","vo2","muito forte",
+                       "repetição","repeticao","série","serie","prova","teste"],
+    "Forte":          ["fartlek","forte","threshold","limiar"],
+    "Moderado Firme": ["progressiv","ritmado","moderado firme","tempo run"],
+    "Moderado":       ["longo","moderado","moder","base","contínuo","continuo",
+                       "aeróbic","aerobic"],
+    "Leve":           ["regenerat","fácil","facil","easy","recovery",
+                       "leve","caminhad","walk","solto"],
+}
+
+# ── Regex pré-compilados (uma vez no startup) ─────────────────────────────────
+_KW_COMPILED: dict[str, re.Pattern] = {
+    intensity: re.compile(
+        "|".join(re.escape(kw) for kw in kws), re.IGNORECASE
+    )
+    for intensity, kws in KEYWORDS_INTENSIDADE.items()
+}
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 MESES_PT = {"Jan":"jan","Feb":"fev","Mar":"mar","Apr":"abr","May":"mai",
             "Jun":"jun","Jul":"jul","Aug":"ago","Sep":"set","Oct":"out",
