@@ -146,6 +146,34 @@ def _groq_ask(question: str, context: str, api_key: str) -> str:
     except Exception as _ex:
         return "Erro ao contatar Groq: " + str(_ex)
 
+def _df_to_ctx_rows(df, cols, labels, max_rows=60):
+    """Serializa um dataframe como linhas de texto compactas para contexto LLM."""
+    import pandas as _pd
+    if df is None or len(df) == 0:
+        return "(sem dados)\n"
+    rows = []
+    header = " | ".join(labels)
+    rows.append(header)
+    rows.append("-" * len(header))
+    for _, r in df.head(max_rows).iterrows():
+        parts = []
+        for col in cols:
+            v = r.get(col, "")
+            try:
+                if _pd.isna(v):
+                    parts.append("—")
+                    continue
+            except Exception:
+                pass
+            if isinstance(v, float):
+                parts.append(f"{v:.1f}")
+            else:
+                parts.append(str(v))
+        rows.append(" | ".join(parts))
+    if len(df) > max_rows:
+        rows.append(f"... (+{len(df)-max_rows} atividades não mostradas)")
+    return "\n".join(rows) + "\n"
+
 def _groq_widget(tab_name: str, context: str, key_suffix: str):
     with st.expander("🤖 Assistente de Treino — pergunte sobre esses dados", expanded=False):
         _q = st.text_input(
@@ -1011,15 +1039,42 @@ with tab_hoje:
         elif _streak_atual == 0: st.warning("⚠️ Sequência interrompida. Que tal retomar esta semana?")
 
     # ── Assistente IA ─────────────────────────────────────────────────────────
+    # ── contexto rico para o assistente de dashboard ──────────────────────────
+    _df_dash_ctx = df_run.copy()
+    _df_dash_ctx["Data"]      = _df_dash_ctx["start_date"].dt.strftime("%d/%m/%Y")
+    _df_dash_ctx["Pace_fmt"]  = fmt_pace_vec(_df_dash_ctx["pace_sec_km"])
+    _df_dash_ctx["FC"]        = (_df_dash_ctx["average_heartrate"].fillna(0).astype(int).astype(str)
+                                  if "average_heartrate" in _df_dash_ctx.columns else "—")
+    _df_dash_ctx["Elev"]      = (_df_dash_ctx["elevation_gain"].fillna(0).astype(int).astype(str) + "m"
+                                  if "elevation_gain" in _df_dash_ctx.columns else "—")
+    # volume por semana (últimas 16)
+    _vol_sem = (df_run.set_index("start_date")["distance_km"]
+                .resample("W").sum().tail(16).reset_index())
+    _vol_sem_txt = "\n".join(
+        f"  Semana {r['start_date'].strftime('%d/%m')}: {r['distance_km']:.1f} km"
+        for _, r in _vol_sem.iterrows()
+    )
+    # volume por mês
+    _vol_mes = (df_run.assign(mes=df_run["start_date"].dt.to_period("M"))
+                .groupby("mes")["distance_km"].sum().tail(12))
+    _vol_mes_txt = "\n".join(f"  {str(m)}: {v:.0f} km" for m, v in _vol_mes.items())
+
     _ctx_dash = (
-        f"Período: {s_dt.date()} a {e_dt.date()}\n"
-        f"Atividades: {len(df_run)} corridas\n"
-        f"Distância total: {df_run['distance_km'].sum():.1f} km\n"
-        f"Pace médio: {fmt_pace(df_run['pace_sec_km'].mean()) if df_run['pace_sec_km'].notna().any() else 'N/A'}\n"
-        f"FC média: {df_run['average_heartrate'].mean():.0f} bpm\n"
-        + (f"ACWR (7d): {ult7d['distance_km'].sum() / max(1, _runs_raw[(hoje-timedelta(days=35)<=_runs_raw['start_date']) & (_runs_raw['start_date']<hoje-timedelta(days=7))]['distance_km'].sum()/4):.2f}\n" if not ult7d.empty else "")
+        f"RESUMO DO PERÍODO: {s_dt.date()} a {e_dt.date()}\n"
+        f"Total atividades: {len(df_run)} | Distância: {df_run['distance_km'].sum():.1f} km\n"
+        f"Pace médio: {fmt_pace(df_run['pace_sec_km'].mean()) if df_run['pace_sec_km'].notna().any() else 'N/A'}/km\n"
+        + (f"FC média: {df_run['average_heartrate'].mean():.0f} bpm\n" if "average_heartrate" in df_run.columns and df_run["average_heartrate"].notna().any() else "")
+        + (f"ACWR (7d/4s): {ult7d['distance_km'].sum() / max(1, _runs_raw[(hoje-timedelta(days=35)<=_runs_raw['start_date']) & (_runs_raw['start_date']<hoje-timedelta(days=7))]['distance_km'].sum()/4):.2f}\n" if not ult7d.empty else "")
         + f"KM últimos 7 dias: {ult7d['distance_km'].sum():.1f} km\n"
         f"Mês atual (KM): {df_run[df_run['start_date'].dt.month == hoje.month]['distance_km'].sum():.1f} km\n"
+        f"\nVOLUME POR SEMANA (últimas 16):\n{_vol_sem_txt}\n"
+        f"\nVOLUME POR MÊS (últimos 12):\n{_vol_mes_txt}\n"
+        f"\nÚLTIMAS 30 ATIVIDADES (Data | Nome | Dist | Pace | FC | Elevação):\n"
+        + _df_to_ctx_rows(
+            _df_dash_ctx.sort_values("start_date", ascending=False).head(30),
+            ["Data", "name", "distance_km", "Pace_fmt", "FC", "Elev"],
+            ["Data", "Nome", "Dist(km)", "Pace", "FC(bpm)", "Elev"],
+            max_rows=30)
     )
     _groq_widget("Dashboard", _ctx_dash, "dash")
 
@@ -1463,16 +1518,48 @@ with tab_desemp:
                 hide_index=True, use_container_width=True)
 
     # ── Assistente IA ─────────────────────────────────────────────────────────
+    # ── contexto rico para o assistente de desempenho ─────────────────────────
+    # Top 10 elevação (já calculado acima como top10)
+    _top10_txt = ""
+    try:
+        _t10 = df_e.nlargest(10, "elevation_gain")[
+            ["start_date","name","distance_km","elevation_gain","elev_km",
+             "pace_sec_km","gap_sec","vert_pace"]].copy()
+        _t10["Data"]      = _t10["start_date"].dt.strftime("%d/%m/%Y")
+        _t10["Pace_f"]    = fmt_pace_vec(_t10["pace_sec_km"])
+        _t10["GAP_f"]     = fmt_pace_vec(_t10["gap_sec"])
+        _t10["VP_f"]      = _t10["vert_pace"].apply(lambda x: f"{x:.0f} m/h" if pd.notna(x) else "—")
+        _top10_txt = _df_to_ctx_rows(
+            _t10, ["Data","name","distance_km","elevation_gain","Pace_f","GAP_f","VP_f"],
+            ["Data","Atividade","Dist(km)","Elev(m)","Pace","GAP","PaceVert"],
+            max_rows=10)
+    except Exception:
+        pass
+    # Todas atividades do período (para perguntas genéricas)
+    _df_d = df_run.copy()
+    _df_d["Data"]    = _df_d["start_date"].dt.strftime("%d/%m/%Y")
+    _df_d["Pace_f"]  = fmt_pace_vec(_df_d["pace_sec_km"])
+    _df_d["FC_f"]    = (_df_d["average_heartrate"].fillna(0).astype(int).astype(str)
+                        if "average_heartrate" in _df_d.columns else "—")
+    _df_d["Elev_f"]  = (_df_d["elevation_gain"].fillna(0).astype(int).astype(str) + "m"
+                        if "elevation_gain" in _df_d.columns else "—")
+    _df_d["Cad_f"]   = (_df_d["average_cadence"].apply(lambda x: f"{x*2:.0f} spm" if pd.notna(x) else "—")
+                        if "average_cadence" in _df_d.columns else "—")
+
     _ctx_desemp = (
-        f"Período analisado: {s_dt.date()} a {e_dt.date()}\n"
-        f"Melhor pace 5K: {melhor_be('5k')}\n"
-        f"Melhor pace 10K: {melhor_be('10k')}\n"
-        f"Melhor 3km: {melhor_3km()}\n"
-        f"Total de atividades: {len(df_run)}\n"
-        f"Distância total: {df_run['distance_km'].sum():.1f} km\n"
+        f"PERÍODO: {s_dt.date()} a {e_dt.date()}\n"
+        f"Melhor pace 5K: {melhor_be('5k')} | 10K: {melhor_be('10k')} | 3km: {melhor_3km()}\n"
+        f"Total atividades: {len(df_run)} | Distância total: {df_run['distance_km'].sum():.1f} km\n"
         f"Pace médio: {fmt_pace(df_run['pace_sec_km'].mean()) if df_run['pace_sec_km'].notna().any() else 'N/A'}/km\n"
         + (f"Cadência média: {df_run['average_cadence'].mean()*2:.0f} spm\n" if "average_cadence" in df_run.columns and df_run["average_cadence"].notna().any() else "")
         + (f"FC média: {df_run['average_heartrate'].mean():.0f} bpm\n" if "average_heartrate" in df_run.columns and df_run["average_heartrate"].notna().any() else "")
+        + (f"\nTOP 10 ATIVIDADES COM MAIOR ELEVAÇÃO:\n{_top10_txt}" if _top10_txt else "")
+        + f"\nTODAS AS ATIVIDADES DO PERÍODO (Data | Nome | Dist | Pace | FC | Elev | Cadência):\n"
+        + _df_to_ctx_rows(
+            _df_d.sort_values("start_date", ascending=False),
+            ["Data","name","distance_km","Pace_f","FC_f","Elev_f","Cad_f"],
+            ["Data","Nome","Dist(km)","Pace","FC","Elev","Cadência"],
+            max_rows=60)
     )
     _groq_widget("Desempenho", _ctx_desemp, "desemp")
 
@@ -1817,14 +1904,48 @@ with tab_carga:
         _tsb_v = float(_pmc_last.get("TSB", 0))
     else:
         _ctl_v = _atl_v = _tsb_v = 0
+    # ── contexto rico para o assistente de carga ──────────────────────────────
+    # Volume por semana das últimas 16 semanas
+    _carga_sem = (df_run.set_index("start_date")["distance_km"]
+                  .resample("W").agg(["sum","count"]).tail(16).reset_index())
+    _carga_sem_txt = "\n".join(
+        f"  {r['start_date'].strftime('%d/%m')}: {r['sum']:.1f} km ({int(r['count'])} corridas)"
+        for _, r in _carga_sem.iterrows()
+    )
+    # Distribuição de zonas FC se disponível
+    _zonas_txt = ""
+    if "average_heartrate" in df_run.columns and df_run["average_heartrate"].notna().any():
+        _fc_max_ctx = st.session_state.get("fc_max", 195)
+        _z_breaks = [0, 0.6, 0.7, 0.8, 0.9, 1.0, 999]
+        _z_labels  = ["Z1(<60%)", "Z2(60-70%)", "Z3(70-80%)", "Z4(80-90%)", "Z5(90-100%)", "Z6(>100%)"]
+        _hr_vals = df_run["average_heartrate"].dropna() / _fc_max_ctx
+        _z_counts = pd.cut(_hr_vals, bins=_z_breaks, labels=_z_labels).value_counts().sort_index()
+        _zonas_txt = " | ".join(f"{z}: {c} ativ." for z, c in _z_counts.items() if c > 0)
+
     _ctx_carga = (
-        f"Período: {s_dt.date()} a {e_dt.date()}\n"
-        f"CTL (fitness): {_ctl_v:.0f}\n"
-        f"ATL (fadiga): {_atl_v:.0f}\n"
-        f"TSB (forma): {_tsb_v:.0f} {'(Forma — pronto pra prova!)' if 5<=_tsb_v<=20 else '(Fatigado)' if _tsb_v < -15 else '(Neutro)'}\n"
-        f"Volume últimas 4 semanas: {df_run[df_run['start_date'] >= pd.Timestamp.now()-timedelta(days=28)]['distance_km'].sum():.0f} km\n"
-        f"Número de atividades no período: {len(df_run)}\n"
-        f"FC média: {df_run['average_heartrate'].mean():.0f} bpm\n" if df_run["average_heartrate"].notna().any() else ""
+        f"PERÍODO: {s_dt.date()} a {e_dt.date()}\n"
+        f"CTL (fitness cumulativo 42d): {_ctl_v:.0f}\n"
+        f"ATL (fadiga 7d): {_atl_v:.0f}\n"
+        f"TSB (forma = CTL-ATL): {_tsb_v:.0f} "
+        + ("(Forma — pronto pra prova!)" if 5<=_tsb_v<=20 else "(Fatigado)" if _tsb_v < -15 else "(Neutro)") + "\n"
+        + f"Volume últimas 4 semanas: {df_run[df_run['start_date'] >= pd.Timestamp.now()-timedelta(days=28)]['distance_km'].sum():.0f} km\n"
+        f"Total atividades no período: {len(df_run)}\n"
+        + (f"FC média: {df_run['average_heartrate'].mean():.0f} bpm\n" if "average_heartrate" in df_run.columns and df_run["average_heartrate"].notna().any() else "")
+        + (f"Distribuição zonas FC: {_zonas_txt}\n" if _zonas_txt else "")
+        + f"\nVOLUME SEMANAL (últimas 16 semanas):\n{_carga_sem_txt}\n"
+        + f"\nATIVIDADES RECENTES (últimas 30) — para análise de carga:\n"
+        + _df_to_ctx_rows(
+            df_run.sort_values("start_date", ascending=False).assign(
+                Data=lambda d: d["start_date"].dt.strftime("%d/%m/%Y"),
+                Pace_f=lambda d: fmt_pace_vec(d["pace_sec_km"]),
+                FC_f=lambda d: (d["average_heartrate"].fillna(0).astype(int).astype(str)
+                                if "average_heartrate" in d.columns else "—"),
+                Elev_f=lambda d: (d["elevation_gain"].fillna(0).astype(int).astype(str) + "m"
+                                  if "elevation_gain" in d.columns else "—")
+            ).head(30),
+            ["Data","name","distance_km","Pace_f","FC_f","Elev_f"],
+            ["Data","Nome","Dist(km)","Pace","FC","Elev"],
+            max_rows=30)
     )
     _groq_widget("Carga & Zonas", _ctx_carga, "carga")
 
