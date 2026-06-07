@@ -68,10 +68,8 @@ GREEN, BLUE, AMBER, RED, PURPLE, GRAY = \
     "#2ECC71","#3498DB","#F39C12","#E74C3C","#9B59B6","#95A5A6"
 
 # ── Groq LLM assistant ────────────────────────────────────────────────────────
-def _groq_ask(question: str, context: str, api_key: str) -> str:
-    import requests as _req
-    if not api_key or len(api_key) < 20:
-        return "Configure a chave API do Groq no sidebar para usar o assistente."
+def _groq_build_system(context: str) -> str:
+    """Monta o system prompt com perfil do atleta + dados do app."""
     _test_str = st.session_state.get("test_3k_str", "3:28")
     try:
         _tp = _test_str.strip().split(":")
@@ -90,7 +88,7 @@ def _groq_ask(question: str, context: str, api_key: str) -> str:
         + "Muito Forte Tiros Longos: " + _test_str + " a " + _s2m(_test_sec+10) + "/km\n"
         + "Muito Forte Tiros Curtos: abaixo de " + _test_str + "/km"
     )
-    _system = (
+    return (
         "Voce e o assistente de treino do Israel, corredor brasileiro de rua e trail running.\n\n"
         "PERFIL DO ATLETA:\n"
         "- Nome: Israel\n"
@@ -116,24 +114,30 @@ def _groq_ask(question: str, context: str, api_key: str) -> str:
         "- Em montanha: FC manda nas subidas, nao o pace\n"
         "- Caminhar subidas acima de 20% e tecnica, nao fraqueza\n"
         "- Progressao segura: maximo 10% de aumento de volume por semana\n\n"
+        "DADOS ATUAIS DO APP (use para responder perguntas especificas):\n"
+        + context + "\n\n"
         "ESTILO DE RESPOSTA:\n"
         "- SEMPRE em portugues brasileiro\n"
         "- Direto, pratico e motivador como um bom treinador\n"
-        "- Use os dados fornecidos para respostas especificas e personalizadas\n"
+        "- Use os dados acima para respostas especificas e personalizadas\n"
         "- Honesto: se algo estiver errado, diga claramente mas de forma construtiva\n"
         "- Maximo 4 paragrafos objetivos. Sem enrolacao.\n"
         "- Quando relevante, mencione a prova de 01/08 como referencia temporal."
     )
+
+def _groq_ask(messages: list, context: str, api_key: str) -> str:
+    """Envia historico de mensagens para o Groq e retorna a resposta."""
+    import requests as _req
+    if not api_key or len(api_key) < 20:
+        return "Configure a chave API do Groq no sidebar para usar o assistente."
+    _system = _groq_build_system(context)
     try:
         _resp = _req.post(
             "https://api.groq.com/openai/v1/chat/completions",
             headers={"Authorization": "Bearer " + api_key, "Content-Type": "application/json"},
             json={
                 "model": "llama-3.1-8b-instant",
-                "messages": [
-                    {"role": "system", "content": _system},
-                    {"role": "user",   "content": "Dados do meu treino:\n" + context + "\n\nPergunta: " + question}
-                ],
+                "messages": [{"role": "system", "content": _system}] + messages,
                 "max_tokens": 700,
                 "temperature": 0.65
             },
@@ -175,19 +179,59 @@ def _df_to_ctx_rows(df, cols, labels, max_rows=60):
     return "\n".join(rows) + "\n"
 
 def _groq_widget(tab_name: str, context: str, key_suffix: str):
-    with st.expander("🤖 Assistente de Treino — pergunte sobre esses dados", expanded=False):
-        _q = st.text_input(
-            "Sua pergunta:",
-            placeholder="Ex: Como estou? O que devo melhorar? Estou pronto para a prova?",
-            key="groq_q_" + key_suffix, label_visibility="collapsed"
-        )
-        if st.button("Perguntar ▶", key="groq_btn_" + key_suffix):
-            if _q.strip():
-                with st.spinner("Consultando assistente..."):
-                    _ans = _groq_ask(_q, context, GROQ_KEY)
-                st.session_state["groq_ans_" + key_suffix] = _ans
-        if ("groq_ans_" + key_suffix) in st.session_state:
-            st.markdown(st.session_state["groq_ans_" + key_suffix])
+    _hist_key = "groq_hist_" + key_suffix
+    _ctx_key  = "groq_ctx_"  + key_suffix
+
+    # Inicializa histórico e atualiza contexto quando o app recarrega dados
+    if _hist_key not in st.session_state:
+        st.session_state[_hist_key] = []
+    # Contexto dos dados pode mudar (novo período, novo sync) — sempre atualiza
+    st.session_state[_ctx_key] = context
+
+    with st.expander("🤖 Assistente de Treino — conversa com histórico", expanded=False):
+        # ── Histórico visual ──────────────────────────────────────────────────
+        _hist = st.session_state[_hist_key]
+        if _hist:
+            for _msg in _hist:
+                if _msg["role"] == "user":
+                    with st.chat_message("user"):
+                        st.markdown(_msg["content"])
+                else:
+                    with st.chat_message("assistant", avatar="🏃"):
+                        st.markdown(_msg["content"])
+            # Botão limpar conversa
+            if st.button("🗑️ Limpar conversa", key="groq_clear_" + key_suffix):
+                st.session_state[_hist_key] = []
+                st.rerun()
+        else:
+            st.caption("Nenhuma pergunta ainda. Comece a conversa abaixo!")
+
+        # ── Input nova mensagem ───────────────────────────────────────────────
+        st.divider()
+        _col_input, _col_btn = st.columns([5, 1])
+        with _col_input:
+            _q = st.text_input(
+                "Mensagem:",
+                placeholder="Ex: Como estou indo? Qual foi meu treino mais pesado?",
+                key="groq_q_" + key_suffix,
+                label_visibility="collapsed"
+            )
+        with _col_btn:
+            _send = st.button("Enviar ▶", key="groq_btn_" + key_suffix, use_container_width=True)
+
+        if _send and _q.strip():
+            # Adiciona pergunta ao histórico
+            st.session_state[_hist_key].append({"role": "user", "content": _q.strip()})
+            # Chama Groq com todo o histórico
+            with st.spinner("Pensando..."):
+                _ans = _groq_ask(
+                    st.session_state[_hist_key],
+                    st.session_state[_ctx_key],
+                    GROQ_KEY
+                )
+            # Adiciona resposta ao histórico
+            st.session_state[_hist_key].append({"role": "assistant", "content": _ans})
+            st.rerun()
 
 DIAS_PT  = {"Monday":"Seg","Tuesday":"Ter","Wednesday":"Qua",
             "Thursday":"Qui","Friday":"Sex","Saturday":"Sáb","Sunday":"Dom"}
