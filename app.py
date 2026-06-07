@@ -125,19 +125,25 @@ def _groq_build_system(context: str) -> str:
         "- Quando relevante, mencione a prova de 01/08 como referencia temporal."
     )
 
+# Máximo de turnos enviados à API (controle de tokens no free tier)
+_GROQ_MAX_TURNS = 10  # = 5 perguntas + 5 respostas → ~7.350 tokens por request
+
 def _groq_ask(messages: list, context: str, api_key: str) -> str:
-    """Envia historico de mensagens para o Groq e retorna a resposta."""
+    """Envia historico de mensagens para o Groq e retorna a resposta.
+    Limita a _GROQ_MAX_TURNS turnos enviados para controlar uso de tokens."""
     import requests as _req
     if not api_key or len(api_key) < 20:
         return "Configure a chave API do Groq no sidebar para usar o assistente."
     _system = _groq_build_system(context)
+    # Mantém histórico completo na UI mas envia só os últimos N turnos à API
+    _messages_to_send = messages[-_GROQ_MAX_TURNS:] if len(messages) > _GROQ_MAX_TURNS else messages
     try:
         _resp = _req.post(
             "https://api.groq.com/openai/v1/chat/completions",
             headers={"Authorization": "Bearer " + api_key, "Content-Type": "application/json"},
             json={
                 "model": "llama-3.1-8b-instant",
-                "messages": [{"role": "system", "content": _system}] + messages,
+                "messages": [{"role": "system", "content": _system}] + _messages_to_send,
                 "max_tokens": 700,
                 "temperature": 0.65
             },
