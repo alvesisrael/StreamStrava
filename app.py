@@ -545,8 +545,8 @@ def load_all(base):
     if not act.empty:
         act["start_date"] = normalize_dt(act["start_date"])
         act["MesAno"]     = mesano_pt(act["start_date"])
-        act["MesAnoOrd"]  = act["start_date"].dt.to_period("M").apply(lambda x: x.ordinal)
-        act["Semana"]     = act["start_date"].dt.to_period("W").apply(lambda x: x.ordinal)
+        act["MesAnoOrd"]  = act["start_date"].dt.year * 12 + act["start_date"].dt.month
+        act["Semana"]     = (act["start_date"] - pd.Timestamp("2020-01-01")).dt.days // 7
         act["SemanaStr"]  = act["start_date"].dt.strftime("Sem %V/%Y")
         act["DiaSemana"]  = act["start_date"].dt.day_name().map(DIAS_PT)
         for _c in ["latitude", "longitude"]:
@@ -565,7 +565,7 @@ def load_all(base):
     if not laps.empty:
         laps["start_date"] = normalize_dt(laps["start_date"])
         laps["MesAno"]     = mesano_pt(laps["start_date"])
-        laps["MesAnoOrd"]  = laps["start_date"].dt.to_period("M").apply(lambda x: x.ordinal)
+        laps["MesAnoOrd"]  = laps["start_date"].dt.year * 12 + laps["start_date"].dt.month
 
     be = pd.DataFrame()  # best_efforts removido — não usado com Garmin
 
@@ -1399,8 +1399,8 @@ with tab_desemp:
                                "GAP normaliza para terreno plano equivalente.")
 
             with col_e2:
-                df_e["_week"]  = df_e["start_date"].dt.to_period("W").apply(lambda x: x.start_time)
-                df_e["_month"] = df_e["start_date"].dt.to_period("M").apply(lambda x: x.start_time)
+                df_e["_week"]  = df_e["start_date"].dt.to_period("W").dt.start_time
+                df_e["_month"] = df_e["start_date"].dt.to_period("M").dt.start_time
                 _period_opts   = {"Semana": "_week", "Mês": "_month"}
                 _period_sel    = st.radio("Acumulado por", list(_period_opts.keys()),
                                           horizontal=True, key="elev_period")
@@ -1429,7 +1429,7 @@ with tab_desemp:
             with col_e3:
                 df_vp = df_e[df_e["vert_pace"].notna()].copy()
                 if not df_vp.empty:
-                    df_vp["_month"] = df_vp["start_date"].dt.to_period("M").apply(lambda x: x.start_time)
+                    df_vp["_month"] = df_vp["start_date"].dt.to_period("M").dt.start_time
                     df_eff = df_vp.groupby("_month").agg(
                         vp_med=("vert_pace", "median"),
                         n=("vert_pace", "count")
@@ -1583,8 +1583,7 @@ with tab_carga:
             (pd.to_datetime(pmc_raw["Data"]) >= s_dt) &
             (pd.to_datetime(pmc_raw["Data"]) <= e_dt)].copy()
         if not pmc_filt.empty:
-            pmc_filt["Semana"] = pd.to_datetime(pmc_filt["Data"]).dt.to_period("W").apply(
-                lambda x: x.start_time)
+            pmc_filt["Semana"] = pd.to_datetime(pmc_filt["Data"]).dt.to_period("W").dt.start_time
             pmc_w  = pmc_filt.groupby("Semana").last().reset_index()
             ctl_at = pmc_w["CTL"].iloc[-1] if len(pmc_w) else 0
             atl_at = pmc_w["ATL"].iloc[-1] if len(pmc_w) else 0
