@@ -43,31 +43,22 @@ def fetch_garmin_activities(
     start_date: str | date,
     end_date: str | date,
     activity_type: str = "running",
-    page_size: int = 200,
+    page_size: int = 200,   # kept for API compat; pagination is handled internally
 ) -> list[dict]:
-    """Fetch all Garmin activities in [start_date, end_date], auto-paginating."""
+    """Fetch all Garmin activities in [start_date, end_date].
+    garminconnect 0.3.x handles pagination internally in get_activities_by_date."""
     client = _get_client()
     if isinstance(start_date, date):
         start_date = start_date.isoformat()
     if isinstance(end_date, date):
         end_date = end_date.isoformat()
 
-    all_activities: list[dict] = []
-    page = 0
-    while True:
-        result = client.get_activities_by_date(
-            startdate=start_date, enddate=end_date,
-            activitytype=activity_type,
-            start=page * page_size, limit=page_size,
-        )
-        batch = result if isinstance(result, list) else result.get("activities", [])
-        if not batch:
-            break
-        all_activities.extend(batch)
-        if len(batch) < page_size:
-            break
-        page += 1
-    return all_activities
+    result = client.get_activities_by_date(
+        startdate=start_date,
+        enddate=end_date,
+        activitytype=activity_type,
+    )
+    return result if isinstance(result, list) else result.get("activities", [])
 
 
 def build_garmin_row(activity: dict) -> dict:
