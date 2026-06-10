@@ -480,11 +480,11 @@ def calc_intensidade_fc(laps_df, act_names=None):
 # ── PMC cacheado ──────────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
 def calc_pmc(df_run_all, ctl_days=42, atl_days=7):
-    """EMA sobre suffer_score diário → CTL / ATL / TSB. Cacheado."""
-    if "suffer_score" not in df_run_all.columns or df_run_all["suffer_score"].isna().all():
+    """EMA sobre training_load diário (TRIMP) → CTL / ATL / TSB. Cacheado."""
+    if "training_load" not in df_run_all.columns or df_run_all["training_load"].isna().all():
         return pd.DataFrame()
-    ss = (df_run_all[df_run_all["suffer_score"].notna()]
-          .set_index("start_date")["suffer_score"]
+    ss = (df_run_all[df_run_all["training_load"].notna()]
+          .set_index("start_date")["training_load"]
           .resample("D").sum())
     if ss.empty:
         return pd.DataFrame()
@@ -567,11 +567,7 @@ def load_all(base):
         laps["MesAno"]     = mesano_pt(laps["start_date"])
         laps["MesAnoOrd"]  = laps["start_date"].dt.to_period("M").apply(lambda x: x.ordinal)
 
-    be = read("activity_best_efforts_consolidated.csv")
-    if not be.empty:
-        be["start_date"] = normalize_dt(be["start_date"])
-        be["MesAno"]     = mesano_pt(be["start_date"])
-        be["MesAnoOrd"]  = be["start_date"].dt.to_period("M").apply(lambda x: x.ordinal)
+    be = pd.DataFrame()  # best_efforts removido — não usado com Garmin
 
     # Classificação de intensidade por FC (dentro do cache — só roda quando dados mudam)
     if not laps.empty and not act.empty:
@@ -759,37 +755,7 @@ for _df in [df, df_run]:
 
 
 # ── Helpers cacheados (all-time, usam dados brutos) ───────────────────────────
-@st.cache_data(show_spinner=False)
-def _melhor_be_cached(_be_raw):
-    """Retorna dict nome_lower → melhor pace (seg). Cacheado."""
-    if _be_raw.empty:
-        return {}
-    return (_be_raw.groupby(_be_raw["name"].str.lower())["pace_sec_km"]
-            .min().to_dict())
-
-@st.cache_data(show_spinner=False)
-def _melhor_3km_cached(_laps_raw):
-    """Melhor pace em 3km consecutivos. Cacheado."""
-    lps = _laps_raw[_laps_raw["activity_sport_type"].isin(["Run","TrailRun"])]
-    if lps.empty:
-        return "—"
-    best = None
-    for _, grp in lps.groupby("activity_id"):
-        km = grp[(grp["distance_m"] >= 900) & (grp["distance_m"] <= 1100)]
-        if len(km) >= 3:
-            t = km.nsmallest(3, "lap_index")["moving_time_sec"].sum()
-            if best is None or t < best:
-                best = t
-    return fmt_pace(best / 3) if best else "—"
-
-_be_cache = _melhor_be_cached(be_raw)
-
-def melhor_be(nome):
-    v = _be_cache.get(nome.lower())
-    return fmt_pace(v) if v else "—"
-
-def melhor_3km():
-    return _melhor_3km_cached(laps_raw)
+# best_efforts / melhor_be / melhor_3km removidos (não disponíveis via Garmin)
 
 
 @st.cache_data(ttl=86400*30, show_spinner=False)
@@ -885,8 +851,8 @@ with tab_hoje:
     ult7d  = _runs_raw[_runs_raw["start_date"] >= hoje - timedelta(days=7)]
     ult28d = _runs_raw[_runs_raw["start_date"] >= hoje - timedelta(days=28)]
 
-    carga_aguda   = float(ult7d["suffer_score"].sum())  if "suffer_score" in _runs_raw.columns else 0.0
-    carga_cronica = float(ult28d["suffer_score"].sum()) / 4 if "suffer_score" in _runs_raw.columns else 0.0
+    carga_aguda   = float(ult7d["training_load"].sum())  if "training_load" in _runs_raw.columns else 0.0
+    carga_cronica = float(ult28d["training_load"].sum()) / 4 if "training_load" in _runs_raw.columns else 0.0
     acwr          = round(carga_aguda / carga_cronica, 2) if carga_cronica > 0 else 0.0
 
     if   acwr < 0.8:  acwr_lbl, acwr_cor = "🟡 Subcarregado",   "normal"
@@ -1019,8 +985,8 @@ with tab_hoje:
     mg1, mg2, mg3, mg4 = st.columns(4)
     mg1.metric("📏 KM este mês",  f"{km_mes:.0f} km",    f"{km_mes/150*100:.0f}% de 150 km")
     mg2.metric("🏃 Treinos",      f"{tr_mes}",            f"{tr_mes/16*100:.0f}% de 16")
-    mg3.metric("🥇 Melhor 5K",    melhor_be("5k"))
-    mg4.metric("🥇 Melhor 10K",   melhor_be("10k"))
+    mg3.metric("🏔️ Elev. este mês", f"{int(df_run[df_run['start_date'].dt.to_period('M') == pd.Timestamp.now().to_period('M')]['elevation_gain'].sum())} m")
+    mg4.metric("💓 FC Média",       f"{df_run['average_heartrate'].mean():.0f} bpm" if df_run["average_heartrate"].notna().any() else "—")
 
     # ── 🔥 Streak de semanas ativas ──────────────────────────────────────────
     st.markdown("---")
@@ -1134,36 +1100,19 @@ with tab_hoje:
 with tab_desemp:
     st.title("⚡ Desempenho")
 
-    # ── Cards de PRs ──────────────────────────────────────────────────────────
+    # ── Cards de desempenho (Garmin) ──────────────────────────────────────────
+    _best_pace = df_run["pace_sec_km"].min() if df_run["pace_sec_km"].notna().any() else None
+    _avg_eff   = df_run["efficiency_index"].mean() if df_run["efficiency_index"].notna().any() else None
+    _total_km  = df_run["distance_km"].sum()
+    _avg_load  = df_run["training_load"].mean() if df_run["training_load"].notna().any() else None
+    _avg_cad   = df_run["average_cadence"].mean() if df_run["average_cadence"].notna().any() else None
     c1,c2,c3,c4,c5 = st.columns(5)
-    c1.metric("🥇 Melhor 3km",  melhor_3km())
-    c2.metric("🥇 Melhor 5K",   melhor_be("5k"))
-    c3.metric("🥇 Melhor 10K",  melhor_be("10k"))
-    c4.metric("🥇 Melhor HM",   melhor_be("half-marathon"), help="Half Marathon 21,1 km")
-    c5.metric("🏅 PRs Totais",  f"{int(df_run['pr_count'].sum()):,}"
-                                  if df_run["pr_count"].notna().any() else "—")
+    c1.metric("⚡ Melhor Pace",   fmt_pace(_best_pace) if _best_pace else "—")
+    c2.metric("📊 Eficiência",    f"{_avg_eff:.4f}" if _avg_eff else "—", help="dist_km / (fc * min) × 1000")
+    c3.metric("📏 Total KM",      f"{_total_km:,.0f} km")
+    c4.metric("🔥 Carga Média",   f"{_avg_load:.1f}" if _avg_load else "—", help="TRIMP médio por treino")
+    c5.metric("🦵 Cadência Média",f"{_avg_cad:.0f} spm" if _avg_cad else "—")
     st.markdown("---")
-
-    # ── Evolução melhor pace 5K / 10K ────────────────────────────────────────
-    if not be.empty:
-        be_sel = be[be["name"].str.lower().isin(["5k","10k"])].copy()
-        if not be_sel.empty:
-            be_best = (be_sel.groupby(["MesAnoOrd","MesAno","name"])
-                             .agg(Pace=("pace_sec_km","min")).reset_index()
-                             .sort_values("MesAnoOrd"))
-            be_best["Pace_fmt"] = fmt_pace_vec(be_best["Pace"])
-            be_best["Pace_min"] = be_best["Pace"] / 60
-            fig = px.line(be_best, x="MesAno", y="Pace_min", color="name",
-                          markers=True, custom_data=["Pace_fmt"],
-                          title="📈 Evolução Melhor Pace — 5K e 10K",
-                          color_discrete_map={"5k": RED, "10k": BLUE,
-                                              "5K": RED, "10K": BLUE},
-                          labels={"Pace_min":"Pace (min/km)","MesAno":"","name":"Distância"})
-            fig.update_traces(
-                hovertemplate="<b>%{x}</b><br>Melhor pace: %{customdata[0]}/km<extra></extra>")
-            set_pace_yaxis(fig, be_best["Pace"])
-            fig.update_layout(xaxis_tickangle=-45)
-            st.plotly_chart(fig, width="stretch")
 
     col_a, col_b = st.columns(2)
 
@@ -1598,7 +1547,8 @@ with tab_desemp:
 
     _ctx_desemp = (
         f"PERÍODO: {s_dt.date()} a {e_dt.date()}\n"
-        f"Melhor pace 5K: {melhor_be('5k')} | 10K: {melhor_be('10k')} | 3km: {melhor_3km()}\n"
+        f"Melhor pace período: {fmt_pace(df_run['pace_sec_km'].min()) if df_run['pace_sec_km'].notna().any() else '—'} | "
+        f"Carga média: {df_run['training_load'].mean():.1f} TRIMP\n" if df_run['training_load'].notna().any() else "Carga: —\n"
         f"Total atividades: {len(df_run)} | Distância total: {df_run['distance_km'].sum():.1f} km\n"
         f"Pace médio: {fmt_pace(df_run['pace_sec_km'].mean()) if df_run['pace_sec_km'].notna().any() else 'N/A'}/km\n"
         + (f"Cadência média: {df_run['average_cadence'].mean()*2:.0f} spm\n" if "average_cadence" in df_run.columns and df_run["average_cadence"].notna().any() else "")
@@ -1680,7 +1630,7 @@ with tab_carga:
             elif tsb_at2 >= -20:  st.warning("⚠️ Fadiga acumulada. Considere um dia leve.")
             else:                  st.error("🛑 Risco de overtraining. Reduza a carga.")
     else:
-        st.info("PMC indisponível (coluna `suffer_score` ausente ou vazia).")
+        st.info("PMC indisponível (training_load ausente ou vazio).")
 
     st.markdown("---")
 
@@ -1692,9 +1642,9 @@ with tab_carga:
 
     col_ac1, col_ac2 = st.columns(2)
     with col_ac1:
-        if df_run["suffer_score"].notna().any():
-            weekly = (df_run[df_run["suffer_score"].notna()]
-                      .set_index("start_date")["suffer_score"].resample("W").sum())
+        if df_run["training_load"].notna().any():
+            weekly = (df_run[df_run["training_load"].notna()]
+                      .set_index("start_date")["training_load"].resample("W").sum())
             acwr_df = pd.DataFrame({"Carga": weekly}).reset_index()
             acwr_df.columns = ["Semana","Carga"]
             # ACWR correto: rolling(1) / rolling(4).mean() por semana
@@ -1711,12 +1661,12 @@ with tab_carga:
                           annotation_text="Risco Alto")
             st.plotly_chart(fig, width="stretch")
         else:
-            st.info("Coluna `suffer_score` não disponível.")
+            st.info("Dados de training_load não disponíveis.")
     with col_ac2:
-        if df_run["suffer_score"].notna().any():
-            df_carga = (df_run[df_run["suffer_score"].notna()]
+        if df_run["training_load"].notna().any():
+            df_carga = (df_run[df_run["training_load"].notna()]
                         .groupby(["Semana","SemanaStr"])
-                        .agg(Carga=("suffer_score","sum")).reset_index()
+                        .agg(Carga=("training_load","sum")).reset_index()
                         .sort_values("Semana").tail(16))
             df_carga["Δ%"] = df_carga["Carga"].pct_change() * 100
             df_carga["cor"] = df_carga["Δ%"].apply(
@@ -3023,8 +2973,8 @@ with tab_hist:
                         lines.append(f"Cadência média: {act_info['average_cadence']*2:.0f} spm")
                     if pd.notna(act_info.get("calories")):
                         lines.append(f"Calorias: {act_info['calories']:.0f} kcal")
-                    if pd.notna(act_info.get("suffer_score")):
-                        lines.append(f"Suffer Score: {act_info['suffer_score']:.0f}")
+                    if pd.notna(act_info.get("training_load")):
+                        lines.append(f"Training Load (TRIMP): {act_info['training_load']:.1f}")
 
                     # Clima
                     if pd.notna(act_info.get("weather_temp")):
