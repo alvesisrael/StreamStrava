@@ -595,6 +595,27 @@ st.sidebar.title("🎛️ Filtros")
 min_d = df_raw["start_date"].min().date()
 max_d = df_raw["start_date"].max().date()
 
+# ── Sanitize cached date_range: clamp to [min_d, max_d] to avoid Streamlit
+#    raising StreamlitAPIException when data changes between sessions ──────
+def _clamp_date_range(key, _min, _max):
+    v = st.session_state.get(key)
+    if v is None:
+        return
+    try:
+        if isinstance(v, (tuple, list)) and len(v) == 2:
+            s = max(_min, min(_max, v[0]))
+            e = max(_min, min(_max, v[1]))
+            if s > e:
+                s, e = _min, _max
+            st.session_state[key] = (s, e)
+        else:
+            del st.session_state[key]
+    except Exception:
+        if key in st.session_state:
+            del st.session_state[key]
+
+_clamp_date_range("date_range", min_d, max_d)
+
 _col1, _col2 = st.sidebar.columns([3, 1])
 with _col1:
     st.markdown("**Período**")
@@ -615,9 +636,15 @@ _quick = {
 for _i, (_lbl, _rng) in enumerate(_quick.items()):
     if _quick_cols[_i % 3].button(_lbl, key=f"qd_{_lbl}", use_container_width=True):
         st.session_state["date_range"] = _rng
+        st.rerun()
+
+# Use key= only; Streamlit uses session_state[key] as the current value.
+# Do NOT pass value= when key= is set — avoids the dual-source conflict.
+if "date_range" not in st.session_state:
+    st.session_state["date_range"] = (min_d, max_d)
 
 date_range = st.sidebar.date_input(
-    "Período", value=st.session_state.get("date_range", (min_d, max_d)),
+    "Período",
     min_value=min_d, max_value=max_d, key="date_range",
     label_visibility="collapsed")
 
