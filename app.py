@@ -1059,9 +1059,9 @@ with tab_hoje:
     _df_dash_ctx = df_run.copy()
     _df_dash_ctx["Data"]      = _df_dash_ctx["start_date"].dt.strftime("%d/%m/%Y")
     _df_dash_ctx["Pace_fmt"]  = fmt_pace_vec(_df_dash_ctx["pace_sec_km"])
-    _df_dash_ctx["FC"]        = (_df_dash_ctx["average_heartrate"].fillna(0).astype(int).astype(str)
+    _df_dash_ctx["FC"]        = (_df_dash_ctx["average_heartrate"].fillna(0).astype(int).apply(str)
                                   if "average_heartrate" in _df_dash_ctx.columns else "—")
-    _df_dash_ctx["Elev"]      = (_df_dash_ctx["elevation_gain"].fillna(0).astype(int).astype(str) + "m"
+    _df_dash_ctx["Elev"]      = (_df_dash_ctx["elevation_gain"].fillna(0).apply(lambda x: f"{int(x)}m")
                                   if "elevation_gain" in _df_dash_ctx.columns else "—")
     # volume por semana (últimas 16)
     _vol_sem = (df_run.set_index("start_date")["distance_km"]
@@ -1538,9 +1538,9 @@ with tab_desemp:
     _df_d = df_run.copy()
     _df_d["Data"]    = _df_d["start_date"].dt.strftime("%d/%m/%Y")
     _df_d["Pace_f"]  = fmt_pace_vec(_df_d["pace_sec_km"])
-    _df_d["FC_f"]    = (_df_d["average_heartrate"].fillna(0).astype(int).astype(str)
+    _df_d["FC_f"]    = (_df_d["average_heartrate"].fillna(0).astype(int).apply(str)
                         if "average_heartrate" in _df_d.columns else "—")
-    _df_d["Elev_f"]  = (_df_d["elevation_gain"].fillna(0).astype(int).astype(str) + "m"
+    _df_d["Elev_f"]  = (_df_d["elevation_gain"].fillna(0).apply(lambda x: f"{int(x)}m")
                         if "elevation_gain" in _df_d.columns else "—")
     _df_d["Cad_f"]   = (_df_d["average_cadence"].apply(lambda x: f"{x*2:.0f} spm" if pd.notna(x) else "—")
                         if "average_cadence" in _df_d.columns else "—")
@@ -2836,9 +2836,9 @@ with tab_hist:
             ids_com_laps = lps_run["activity_id"].unique()
             df_sel = df_hv[df_hv["id"].isin(ids_com_laps)].copy()
             df_sel = df_sel.sort_values("start_date", ascending=False)
-            df_sel["label"] = (df_sel["start_date"].dt.strftime("%d/%m/%Y") +
-                               " — " + df_sel["name"].fillna("Sem nome") +
-                               " (" + df_sel["distance_km"].apply(lambda x: f"{x:.1f}km") + ")")
+            df_sel["label"] = df_sel.apply(
+                lambda r: f"{r['start_date'].strftime('%d/%m/%Y')} — {r['name'] if pd.notna(r['name']) else 'Sem nome'} ({r['distance_km']:.1f}km)",
+                axis=1)
             ativ_selecionada = st.selectbox(
                 "Selecione uma corrida:",
                 options=df_sel["id"].tolist(),
