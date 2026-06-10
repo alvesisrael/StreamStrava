@@ -1129,7 +1129,7 @@ with tab_hoje:
     @st.cache_data(ttl=3600, show_spinner=False)
     def _load_garmin_insights():
         import json, os
-        p = os.path.join(BASE, "data", "processed", "garmin_insights.json")
+        p = os.path.join(BASE, "garmin_insights.json")
         if not os.path.exists(p):
             return None
         with open(p) as f:

@@ -99,92 +99,127 @@ def _fmt_seconds(sec) -> str:
     return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
 
 
+def _parse_rhr(raw) -> int | None:
+    """Extract RHR int from any garminconnect response shape."""
+    if isinstance(raw, (int, float)):
+        return int(raw)
+    if not isinstance(raw, dict):
+        return None
+    # garminconnect 0.3.x: allMetrics.metricsMap or direct keys
+    mm = (raw.get("allMetrics") or {}).get("metricsMap") or {}
+    for key in ("WELLNESS_RESTING_HEART_RATE", "restingHeartRate"):
+        v = mm.get(key)
+        if v:
+            if isinstance(v, list) and v:
+                return int(v[0].get("value", 0) or 0)
+            if isinstance(v, (int, float)):
+                return int(v)
+    # flat keys
+    for key in ("restingHeartRate", "value", "heartRate"):
+        v = raw.get(key)
+        if v:
+            return int(v)
+    return None
+
+
 def refresh_garmin_insights() -> None:
-    """Fetch live Garmin data and write garmin_insights.json."""
+    """Fetch live Garmin data and MERGE into garmin_insights.json.
+    Preserves existing data for any field that fails to update."""
     print("[Garmin Insights] Refreshing ...")
     today     = date.today()
     start_30d = (today - timedelta(days=29)).isoformat()
     today_str = today.isoformat()
 
-    insights: dict = {"updated_at": today_str}
-
-    try:
-        import garminconnect
-        COOKIES_PATH = Path(os.path.expanduser("~/.garminconnect/cookies.json"))
-        client = garminconnect.Garmin()
-
-        if COOKIES_PATH.exists():
-            try:
-                with open(COOKIES_PATH) as _f:
-                    _cookies_raw = _f.read()
-                client.garth.loads(_cookies_raw)
-            except Exception:
-                pass
-
+    # Load existing data as baseline — never overwrite with empty
+    existing: dict = {}
+    if INSIGHTS_FILE.exists():
         try:
-            client.login()
+            with open(INSIGHTS_FILE) as _f:
+                existing = json.load(_f)
         except Exception:
             pass
 
+    insights: dict = {**existing, "updated_at": today_str}
+
+    try:
+        from garminconnect import Garmin
+        TOKENS_DIR = Path.home() / ".garminconnect"
+        client = Garmin()
+        client.login(str(TOKENS_DIR))
+
         # ── Race Predictions ─────────────────────────────────────────────────
         try:
-            rp_raw = client.get_race_predictions()
+            rp_raw = client.get_race_predictions()   # no args = latest
             rp_out: dict = {}
-            items = rp_raw if isinstance(rp_raw, list) else [rp_raw]
-            for item in items:
-                if not isinstance(item, dict):
-                    continue
-                for dist_key, label in [
-                    ("fiveK",        "5K"),
-                    ("tenK",         "10K"),
-                    ("halfMarathon", "half_marathon"),
-                    ("marathon",     "marathon"),
-                ]:
-                    val = item.get(dist_key)
-                    if isinstance(val, dict):
-                        secs = val.get("timeInSeconds") or val.get("time") or 0
-                        rp_out[label] = {"time": _fmt_seconds(secs), "time_seconds": int(secs)}
+            if isinstance(rp_raw, dict):
+                # garminconnect 0.3.x returns nested dict with distance keys
+                # possible shapes: {fiveK:{time,timeInSeconds}, ...}
+                #                  {racePredictions:[{distance,time,...},...]}
+                #                  {predictions:{5K:{time,time_seconds},...}}
+                preds = rp_raw.get("racePredictions") or rp_raw.get("predictions") or rp_raw
+                if isinstance(preds, list):
+                    for p in preds:
+                        dist = str(p.get("distance", "")).upper().replace(" ", "")
+                        secs = p.get("time") or p.get("timeInSeconds") or 0
+                        label = {"5K": "5K", "10K": "10K",
+                                 "HALFMARATHON": "half_marathon", "MARATHON": "marathon"}.get(dist)
+                        if label and secs:
+                            rp_out[label] = {"time": _fmt_seconds(secs), "time_seconds": int(secs)}
+                elif isinstance(preds, dict):
+                    # Try camelCase keys first (raw garminconnect)
+                    for dist_key, label in [
+                        ("fiveK", "5K"), ("tenK", "10K"),
+                        ("halfMarathon", "half_marathon"), ("marathon", "marathon"),
+                    ]:
+                        val = preds.get(dist_key) or preds.get(label) or preds.get(label.replace("_", ""))
+                        if isinstance(val, dict):
+                            secs = val.get("timeInSeconds") or val.get("time_seconds") or val.get("time") or 0
+                            if secs and not isinstance(secs, str):
+                                rp_out[label] = {"time": _fmt_seconds(secs), "time_seconds": int(secs)}
+                            elif isinstance(secs, str) and ":" in secs:
+                                # already formatted — parse back
+                                parts = secs.split(":")
+                                total = sum(int(x) * (60 ** (len(parts)-1-i)) for i, x in enumerate(parts))
+                                rp_out[label] = {"time": secs, "time_seconds": total}
             if rp_out:
                 insights["race_predictions"] = rp_out
                 print(f"  OK Race predictions: {list(rp_out.keys())}")
+            else:
+                print(f"  WARN Race predictions: empty response shape: {list(rp_raw.keys()) if isinstance(rp_raw, dict) else type(rp_raw)}")
         except Exception as e:
             print(f"  WARN Race predictions: {e}")
 
-        # ── VO2max ────────────────────────────────────────────────────────────
+        # ── VO2max — from user profile (userData.vo2MaxRunning) ───────────────
         try:
-            vo2_data = client.get_vo2max_trend(start_30d, today_str)
-            if isinstance(vo2_data, list) and vo2_data:
-                vals = []
-                for v in vo2_data:
-                    if isinstance(v, dict):
-                        x = v.get("vo2MaxValue") or v.get("value")
-                        if x is not None:
-                            vals.append(float(x))
-                if vals:
-                    cur  = vals[-1]
-                    prev = vals[-2] if len(vals) >= 2 else cur
-                    insights["vo2max"] = {
-                        "current":  cur,
-                        "previous": prev,
-                        "change":   round(cur - prev, 1),
-                    }
-                    print(f"  OK VO2max: {cur}")
+            profile = client.get_user_profile()
+            vo2 = None
+            if isinstance(profile, dict):
+                ud = profile.get("userData") or profile
+                vo2 = ud.get("vo2MaxRunning") or ud.get("vo2Max")
+            if vo2 is not None:
+                prev_vo2 = (existing.get("vo2max") or {}).get("current", float(vo2))
+                insights["vo2max"] = {
+                    "current":  float(vo2),
+                    "previous": float(prev_vo2),
+                    "change":   round(float(vo2) - float(prev_vo2), 1),
+                }
+                print(f"  OK VO2max: {vo2}")
         except Exception as e:
             print(f"  WARN VO2max: {e}")
 
-        # ── Resting HR ────────────────────────────────────────────────────────
+        # ── Resting HR — try today then fallback to yesterday ─────────────────
         try:
-            rhr_raw = client.get_rhr_day(today_str)
             rhr_val = None
-            if isinstance(rhr_raw, dict):
-                rhr_val = (rhr_raw.get("restingHeartRate")
-                           or (rhr_raw.get("allDayHR") or {}).get("restingHeartRate")
-                           or rhr_raw.get("value"))
-            elif isinstance(rhr_raw, (int, float)):
-                rhr_val = int(rhr_raw)
+            for try_date in [today_str, (today - timedelta(days=1)).isoformat()]:
+                raw = client.get_rhr_day(try_date)
+                rhr_val = _parse_rhr(raw)
+                if rhr_val:
+                    break
             if rhr_val:
-                insights["rhr_today"] = int(rhr_val)
-                print(f"  OK RHR: {int(rhr_val)} bpm")
+                insights["rhr_today"] = rhr_val
+                print(f"  OK RHR: {rhr_val} bpm")
+            else:
+                print("  WARN RHR: no data (device not synced yet?)")
         except Exception as e:
             print(f"  WARN RHR: {e}")
 
@@ -196,10 +231,10 @@ def refresh_garmin_insights() -> None:
                 if not isinstance(day, dict):
                     continue
                 d   = day.get("date") or day.get("calendarDate", "")
-                chg = day.get("charged")  or day.get("chargedValue",  0) or 0
-                drn = day.get("drained")  or day.get("drainedValue",  0) or 0
-                if d:
-                    bb_out.append({"date": str(d), "charged": int(chg), "drained": int(drn)})
+                chg = day.get("charged") if day.get("charged") is not None else day.get("chargedValue", 0)
+                drn = day.get("drained") if day.get("drained") is not None else day.get("drainedValue", 0)
+                if d and chg is not None:
+                    bb_out.append({"date": str(d), "charged": int(chg or 0), "drained": int(drn or 0)})
             if bb_out:
                 insights["body_battery"] = bb_out
                 print(f"  OK Body Battery: {len(bb_out)} days")
