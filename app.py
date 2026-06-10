@@ -1200,32 +1200,31 @@ with tab_hoje:
                 _bb_df["date"] = pd.to_datetime(_bb_df["date"])
                 _bb_df = _bb_df.tail(14)  # last 14 days
 
+                # Saldo líquido: verde se carregou mais do que gastou, vermelho se não
+                _bb_df["saldo"] = _bb_df["charged"].fillna(0) - _bb_df["drained"].fillna(0)
+                _bb_colors = [GREEN if v >= 0 else RED for v in _bb_df["saldo"]]
+
                 _fig_bb = go.Figure()
-                _fig_bb.add_bar(
-                    x=_bb_df["date"].dt.strftime("%d/%m"),
-                    y=_bb_df["charged"],
-                    name="Carregado",
-                    marker_color=GREEN,
-                    text=_bb_df["charged"].apply(lambda x: str(x) if x > 0 else ""),
-                    textposition="inside"
+                _bb_df["hover"] = _bb_df.apply(
+                    lambda r: f"Carregado: {int(r.get('charged',0) or 0)}<br>Gasto: {int(r.get('drained',0) or 0)}<br>Saldo: {int(r['saldo'])}",
+                    axis=1
                 )
                 _fig_bb.add_bar(
                     x=_bb_df["date"].dt.strftime("%d/%m"),
-                    y=[-v for v in _bb_df["drained"]],
-                    name="Gasto",
-                    marker_color=RED,
-                    text=_bb_df["drained"].apply(lambda x: str(x)),
-                    textposition="inside"
+                    y=_bb_df["saldo"],
+                    marker_color=_bb_colors,
+                    text=_bb_df["saldo"].apply(lambda v: f"+{int(v)}" if v >= 0 else str(int(v))),
+                    textposition="outside",
+                    customdata=_bb_df["hover"],
+                    hovertemplate="<b>%{x}</b><br>%{customdata}<extra></extra>",
+                    showlegend=False,
                 )
+                _fig_bb.add_hline(y=0, line_color="gray", line_width=1)
                 _fig_bb.update_layout(
-                    title="🔋 Body Battery — 14 dias",
-                    barmode="overlay",
-                    height=220,
-                    margin=dict(t=35, b=10, l=0, r=0),
-                    legend=dict(orientation="h", y=-0.15),
-                    yaxis=dict(range=[-100, 100], tickvals=[-75,-50,-25,0,25,50,75],
-                               ticktext=["75","50","25","0","25","50","75"]),
-                    showlegend=True,
+                    title="🔋 Body Battery — saldo diário (carregado − gasto)",
+                    height=230,
+                    margin=dict(t=40, b=10, l=0, r=0),
+                    yaxis=dict(title="", zeroline=False),
                 )
                 st.plotly_chart(_fig_bb, use_container_width=True)
     else:
