@@ -4,8 +4,8 @@ src/ingestion/garmin.py
 Fetches running activities from Garmin Connect using the garminconnect library.
 
 Requires:
-    pip install garminconnect
-    Cookies at ~/.garminconnect/cookies.json
+    pip install garminconnect garth
+    Run garmin_login.py once to save tokens to ~/.garth/
 """
 
 from __future__ import annotations
@@ -14,9 +14,11 @@ from datetime import date
 from pathlib import Path
 import pandas as pd
 
-RESTING_HR   = 45
-MAX_HR       = 195
-COOKIES_PATH = Path.home() / ".garminconnect" / "cookies.json"
+RESTING_HR  = 45
+MAX_HR      = 195
+
+# garminconnect 0.3.2 stores tokens as garmin_tokens.json inside this dir
+TOKENS_DIR  = Path.home() / ".garminconnect"
 
 
 def _get_client():
@@ -24,10 +26,16 @@ def _get_client():
         from garminconnect import Garmin
     except ImportError as e:
         raise ImportError("Run: pip install garminconnect") from e
-    if not COOKIES_PATH.exists():
-        raise FileNotFoundError(f"Garmin cookies not found at {COOKIES_PATH}")
+
+    tokens_file = TOKENS_DIR / "garmin_tokens.json"
+    if not tokens_file.exists():
+        raise FileNotFoundError(
+            f"Garmin tokens not found at {tokens_file}\n"
+            "Run: python garmin_login.py"
+        )
+
     client = Garmin()
-    client.login(str(COOKIES_PATH))
+    client.login(str(TOKENS_DIR))
     return client
 
 
