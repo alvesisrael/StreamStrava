@@ -1,0 +1,10 @@
+Coloque as fotos aqui com estes nomes exatos:
+
+  capa.jpg    → foto principal dela (retrato, 3x4)
+  foto1.jpg   → foto favorita de vocês dois (wide)
+  foto2.jpg   → ela treinando
+  foto3.jpg   → dia de prova
+  foto4.jpg   → momento especial
+  foto5.jpg   → foto do coração (wide)
+
+Formatos aceitos: .jpg, .jpeg, .png, .webp
