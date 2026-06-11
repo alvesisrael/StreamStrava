@@ -170,23 +170,28 @@ body{{background:var(--black);color:var(--white);font-family:'Inter',sans-serif;
   padding:32px 20px;display:flex;flex-direction:column;align-items:center;gap:20px;
 }}
 .vinyl{{
-  width:clamp(160px,40vw,220px);height:clamp(160px,40vw,220px);
+  width:clamp(200px,50vw,260px);height:clamp(200px,50vw,260px);
   border-radius:50%;position:relative;
-  background:conic-gradient(#1a1a1a 0deg,#222 10deg,#1a1a1a 20deg,#222 30deg,#1a1a1a 40deg,#222 50deg,#1a1a1a 60deg,#222 70deg,#1a1a1a 80deg,#222 90deg,#1a1a1a 100deg,#222 110deg,#1a1a1a 120deg,#222 130deg,#1a1a1a 140deg,#222 150deg,#1a1a1a 160deg,#222 170deg,#1a1a1a 180deg,#222 190deg,#1a1a1a 200deg,#222 210deg,#1a1a1a 220deg,#222 230deg,#1a1a1a 240deg,#222 250deg,#1a1a1a 260deg,#222 270deg,#1a1a1a 280deg,#222 290deg,#1a1a1a 300deg,#222 310deg,#1a1a1a 320deg,#222 330deg,#1a1a1a 340deg,#222 350deg,#1a1a1a 360deg);
+  background:radial-gradient(circle,
+    transparent 0%,transparent 31%,
+    #1a1a1a 32%,#252525 34%,#1a1a1a 36%,#252525 38%,#1a1a1a 40%,
+    #252525 42%,#1a1a1a 44%,#252525 46%,#1a1a1a 48%,#252525 50%,
+    #111 52%,#1a1a1a 100%);
   animation:spin 5s linear infinite;
   animation-play-state:paused;
-  box-shadow:0 0 32px rgba(0,0,0,.8);
+  box-shadow:0 0 40px rgba(0,0,0,.9),0 0 0 2px #222;
 }}
 .vinyl.playing{{animation-play-state:running}}
 .vinyl-label{{
   position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
-  width:42%;height:42%;border-radius:50%;overflow:hidden;
-  border:3px solid #333;
+  width:65%;height:65%;border-radius:50%;overflow:hidden;
+  border:3px solid #444;
   {disc_center};
 }}
 .vinyl-hole{{
   position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
-  width:8%;height:8%;border-radius:50%;background:#0a0a0a;z-index:2;
+  width:5%;height:5%;border-radius:50%;background:#0a0a0a;
+  border:1px solid #333;z-index:2;
 }}
 @keyframes spin{{from{{transform:rotate(0deg)}}to{{transform:rotate(360deg)}}}}
 .player-ctrl{{display:flex;align-items:center;gap:16px}}
