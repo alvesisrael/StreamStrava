@@ -126,28 +126,24 @@ html = f"""
     .intro-logo {{
       font-family: 'Playfair Display', serif; font-size: clamp(14px,2vw,18px);
       letter-spacing: 0.4em; text-transform: uppercase; color: var(--gold);
-      opacity: 0; animation: fadeUp 1s ease 0.5s forwards;
     }}
     .intro-title {{
       font-family: 'Playfair Display', serif; font-size: clamp(42px,10vw,96px);
       font-weight: 900; line-height: 1; text-align: center;
       background: linear-gradient(135deg, var(--gold-dark), var(--gold-light), var(--gold));
       -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-      opacity: 0; animation: fadeUp 1s ease 0.9s forwards;
     }}
     .intro-year {{
       font-family: 'Playfair Display', serif; font-size: clamp(18px,4vw,36px);
       letter-spacing: 0.6em; color: var(--gold-light);
-      opacity: 0; animation: fadeUp 1s ease 1.2s forwards;
     }}
     .intro-divider {{
       width: 120px; height: 1px;
       background: linear-gradient(90deg, transparent, var(--gold), transparent);
-      opacity: 0; animation: fadeIn 1s ease 1.6s forwards;
     }}
     .intro-hint {{
       font-size: 12px; letter-spacing: 0.3em; text-transform: uppercase; color: var(--gray);
-      opacity: 0; animation: pulse 2s ease 2.2s infinite;
+      animation: pulse 2s ease infinite;
     }}
     .gold-particles {{ position: absolute; inset: 0; pointer-events: none; overflow: hidden; }}
     .particle {{
@@ -156,7 +152,7 @@ html = f"""
     }}
 
     /* MAIN */
-    #main {{ opacity: 0; transition: opacity 1.5s ease; }}
+    #main {{ opacity: 0; transition: opacity 1s ease; }}
     #main.visible {{ opacity: 1; }}
 
     /* HERO */
@@ -173,35 +169,33 @@ html = f"""
     }}
     .hero-eyebrow {{
       font-size: 11px; letter-spacing: 0.5em; text-transform: uppercase;
-      color: var(--gold); margin-bottom: 32px; opacity: 0;
-      animation: fadeUp 0.8s ease 0.3s forwards;
+      color: var(--gold); margin-bottom: 32px;
     }}
-    .trophy-wrap {{ margin-bottom: 40px; opacity: 0; animation: fadeUp 0.8s ease 0.5s forwards; }}
+    .trophy-wrap {{ margin-bottom: 40px; }}
     .trophy-svg {{ width: 100px; height: 120px; filter: drop-shadow(0 0 30px rgba(201,168,76,0.5)); }}
     .hero-title {{
       font-family: 'Playfair Display', serif; font-size: clamp(48px,12vw,120px);
       font-weight: 900; line-height: 0.9;
       background: linear-gradient(160deg, var(--gold-dark) 0%, var(--gold-light) 50%, var(--gold) 100%);
       -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-      margin-bottom: 8px; opacity: 0; animation: fadeUp 0.8s ease 0.7s forwards;
+      margin-bottom: 8px;
     }}
     .hero-name {{
       font-family: 'Playfair Display', serif; font-size: clamp(36px,8vw,80px);
       font-weight: 900; font-style: italic; color: var(--gold-light);
-      margin-bottom: 16px; opacity: 0; animation: fadeUp 0.8s ease 1.1s forwards;
+      margin-bottom: 16px;
     }}
     .hero-edition {{
       font-size: 13px; letter-spacing: 0.4em; text-transform: uppercase; color: var(--gray);
-      opacity: 0; animation: fadeUp 0.8s ease 1.3s forwards;
     }}
     .hero-line {{
       width: 200px; height: 1px;
       background: linear-gradient(90deg, transparent, var(--gold), transparent);
-      margin: 40px auto; opacity: 0; animation: fadeIn 1s ease 1.5s forwards;
+      margin: 40px auto;
     }}
     .scroll-hint {{
       font-size: 11px; letter-spacing: 0.4em; text-transform: uppercase; color: var(--gray);
-      opacity: 0; animation: pulse 2s ease 2s infinite;
+      animation: pulse 2s ease infinite;
     }}
 
     /* MUSIC */
