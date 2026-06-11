@@ -334,7 +334,7 @@ footer{{padding:44px 20px;text-align:center;border-top:1px solid #1a1a1a}}
   <!-- FOTO PRINCIPAL -->
   <section class="photo-sec">
     <div class="photo-main reveal">{capa_tag(f_capa)}</div>
-    <p class="photo-cap reveal">"A campeã que escolhi amar todos os dias — dentro e fora das pistas."</p>
+    <p class="photo-cap reveal">"A campeã que escolhi amar todos os dias."</p>
   </section>
 
   <!-- STATS -->
@@ -352,10 +352,10 @@ footer{{padding:44px 20px;text-align:center;border-top:1px solid #1a1a1a}}
     <p class="sl2 reveal">Dia dos Namorados · Categorias premiadas</p>
     <h2 class="st reveal">Tudo que você é<br>e que me conquistou</h2>
     <div class="cards">
-      <div class="card reveal"><div class="medal">🥇</div><div class="cn">Melhor Performance · 2026</div><div class="ct">Força Inabalável</div><div class="cd">Pela capacidade de acordar antes do sol, honrar cada treino e nunca deixar que o cansaço vença a determinação. Você prova todo dia que ouro é feito de repetição — e eu tenho sorte de ver isso de perto.</div></div>
-      <div class="card reveal"><div class="medal">❤️</div><div class="cn">Prêmio do Coração · 12.06</div><div class="ct">A Que Me Conquistou</div><div class="cd">Não foi num dia especial, não teve momento exato. Você foi chegando, do jeito que você é — determinada, intensa, bonita — e eu percebi que não queria mais ninguém ao meu lado.</div></div>
+      <div class="card reveal"><div class="medal">🥇</div><div class="cn">Melhor Performance · 2026</div><div class="ct">Força Inabalável</div><div class="cd">Pela capacidade de acordar antes do sol, honrar cada treino e nunca deixar que o cansaço vença a determinação. Você prova todo dia que ouro é feito de repetição — e eu tenho sorte de ver isso de perto e poder ajudar em alguns dias.</div></div>
+      <div class="card reveal"><div class="medal">❤️</div><div class="cn">Prêmio do Coração · 12.06</div><div class="ct">A Que Me Conquistou</div><div class="cd">Não foi num dia especial, não teve momento exato. Me aproximei o quanto antes porque sabia que você era a pessoa certa e eu não queria mais ninguém ao meu lado.</div></div>
       <div class="card reveal"><div class="medal">🏅</div><div class="cn">Categoria Relacionamento</div><div class="ct">Melhor Parceira</div><div class="cd">Por me mostrar o que é comprometimento de verdade. Por trazer leveza mesmo nos dias pesados. Por celebrar minhas vitórias com a mesma energia que celebra as suas.</div></div>
-      <div class="card reveal"><div class="medal">⭐</div><div class="cn">Prêmio Especial · Dia dos Namorados</div><div class="ct">Meu Amor</div><div class="cd">Hoje, 12 de junho, quero que você saiba: não precisa de prova, nem de medalha, nem de plateia pra ser especial pra mim. Você já é, todo dia, só por ser quem você é.</div></div>
+      <div class="card reveal"><div class="medal">⭐</div><div class="cn">Prêmio Especial · Dia dos Namorados</div><div class="ct">Meu Amor</div><div class="cd">Hoje, 12 de junho, quero que você saiba: não precisa de prova, nem de medalha, nem de plateia pra ser especial pra mim. Você já é, todo dia, só por ser quem você é TE AMO nenem.</div></div>
     </div>
   </section>
 
@@ -379,9 +379,9 @@ footer{{padding:44px 20px;text-align:center;border-top:1px solid #1a1a1a}}
     <p class="qm reveal">"</p>
     <p class="dt reveal">
       Hoje é 12 de junho. O dia que o mundo escolheu pra falar de amor.<br/><br/>
-      Mas eu não preciso de uma data pra saber o que sinto. Sinto isso quando te vejo acordar cedo pra treinar enquanto eu ainda estou dormindo. Quando você volta cansada e mesmo assim sorri. Quando você fala dos seus objetivos com aquela vontade nos olhos.<br/><br/>
+      Mas eu não preciso de uma data pra saber o que sinto. Sinto isso quando te vejo acordar cedo pra treinar enquanto eu ainda estou dormindo com a ratinha. Quando você volta cansada e mesmo assim sorri. Quando você fala dos seus objetivos com aquela vontade nos olhos.<br/><br/>
       <em>Você é atleta na pista e no amor — com a mesma entrega, a mesma garra, a mesma presença.</em><br/><br/>
-      Nesse dia dos namorados, eu quero que você saiba que torço por você em tudo — nas provas, nos treinos, nos sonhos, na vida. <em>E que não existe prêmio melhor do que poder te chamar de minha.</em>
+      Nesse dia dos namorados, eu quero que você saiba que estou com você em tudo — nas provas, nos treinos, nos sonhos, na vida. <em>E que não existe prêmio melhor do que poder te chamar de minha.</em>
     </p>
     <div class="ddiv"></div>
     <p class="dsig reveal">Com todo o meu amor,<br/>{SEU_NOME} 💛</p>
