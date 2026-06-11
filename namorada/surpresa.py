@@ -322,8 +322,8 @@ footer{{padding:44px 20px;text-align:center;border-top:1px solid #1a1a1a}}
       <div class="vinyl-hole"></div>
     </div>
     <div class="player-info">
-      <div class="player-song">Nossa música 💛</div>
-      <div class="player-artist">Trilha sonora do nosso amor</div>
+      <div class="player-song">Diagnóstico</div>
+      <div class="player-artist">Ryu, The Runner, BIN, Thiago Sub</div>
       <div class="player-status" id="playerStatus"></div>
     </div>
     <div class="player-ctrl">
