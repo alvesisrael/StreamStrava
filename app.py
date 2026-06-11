@@ -1280,30 +1280,48 @@ with tab_desemp:
             _mp = (lps_run.groupby("activity_id")
                    .apply(compute_main_laps_pace).dropna().reset_index())
             _mp.columns = ["id","pace_main"]
-            df_run_p = df_run.merge(_mp, on="id", how="left")
-            df_run_p["pace_plot"] = df_run_p["pace_main"].fillna(df_run_p["pace_sec_km"])
+            # Somente atividades COM dados de lap — sem fallback para pace médio geral
+            df_run_p = df_run.merge(_mp, on="id", how="inner")
+            df_run_p["pace_plot"] = df_run_p["pace_main"]
+            _n_lap_acts = len(df_run_p)
         else:
-            df_run_p = df_run.copy()
-            df_run_p["pace_plot"] = df_run_p["pace_sec_km"]
+            df_run_p = pd.DataFrame()
+            _n_lap_acts = 0
 
-        df_b = cat_intensity(df_run_p[df_run_p["pace_plot"].notna()].copy())
-        df_agg = (df_b.groupby("Intensidade", observed=True)["pace_plot"]
-                     .agg(Media="mean", DP="std").reset_index().dropna())
+        if not df_run_p.empty:
+            df_b = cat_intensity(df_run_p[df_run_p["pace_plot"].notna()].copy())
+            df_agg = (df_b.groupby("Intensidade", observed=True)["pace_plot"]
+                         .agg(Media="mean", DP="std").reset_index().dropna())
+            _n_per_cat = df_b.groupby("Intensidade", observed=True).size().to_dict()
+        else:
+            df_agg = pd.DataFrame()
         if not df_agg.empty:
             df_agg["Media_min"] = df_agg["Media"] / 60
             df_agg["DP_min"]    = df_agg["DP"] / 60
             df_agg["Label"]     = fmt_pace_vec(df_agg["Media"])
             df_agg["Cor"]       = df_agg["Intensidade"].map(INTENSITY_COLORS)
+            df_agg["n"]         = df_agg["Intensidade"].map(_n_per_cat).fillna(0).astype(int)
             fig = go.Figure()
             for _, row in df_agg.iterrows():
                 fig.add_bar(x=[row["Intensidade"]], y=[row["Media_min"]],
                             error_y=dict(type="data", array=[row["DP_min"]], visible=True),
                             marker_color=row["Cor"], name=row["Intensidade"],
-                            text=row["Label"], textposition="outside")
+                            text=row["Label"], textposition="outside",
+                            hovertemplate=f"<b>{row['Intensidade']}</b><br>Pace: {row['Label']}/km<br>n={row['n']} atividades<extra></extra>")
             set_pace_yaxis(fig, df_agg["Media"])
-            fig.update_layout(title="🎯 Pace por Tipo de Treino", showlegend=False)
+            fig.update_layout(
+                title="🎯 Pace por Tipo de Treino",
+                showlegend=False,
+                annotations=[dict(
+                    text=f"ℹ️ Calculado com {_n_lap_acts} atividades que possuem dados de lap",
+                    xref="paper", yref="paper", x=0, y=-0.18,
+                    showarrow=False, font=dict(size=11, color="gray"), xanchor="left"
+                )]
+            )
             st.plotly_chart(fig, width="stretch")
-            st.caption("Pace do bloco principal (aquec/desaquec excluídos). Barra = desvio padrão.")
+            st.caption("Pace do bloco principal (laps de recuperação excluídos). Barra = desvio padrão. Hover = nº de atividades por categoria.")
+        else:
+            st.info("Sem dados de lap disponíveis para calcular pace por tipo de treino.")
 
     # ── Consistência de pace (CV%) ────────────────────────────────────────────
     with col_b:
