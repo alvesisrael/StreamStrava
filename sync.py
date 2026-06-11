@@ -65,6 +65,15 @@ def fetch_and_merge(start: str, end: str, df_existing: pd.DataFrame) -> pd.DataF
 
     df_combined = pd.concat([df_existing, df_new], ignore_index=True)
     df_combined = df_combined.drop_duplicates(subset=["id"], keep="last")
+
+    # Secondary dedup: same start_date within same minute → keep longer activity
+    # (Garmin sometimes creates two records for the same workout)
+    df_combined["start_date"] = pd.to_datetime(df_combined["start_date"])
+    df_combined = df_combined.sort_values("distance_km", ascending=False)
+    df_combined["_ts_min"] = df_combined["start_date"].dt.floor("min")
+    df_combined = df_combined.drop_duplicates(subset=["_ts_min"], keep="first")
+    df_combined = df_combined.drop(columns=["_ts_min"])
+
     return df_combined.sort_values("start_date").reset_index(drop=True)
 
 
