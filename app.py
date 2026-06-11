@@ -505,7 +505,12 @@ def calc_pmc(df_run_all, ctl_days=42, atl_days=7):
     return pmc
 
 def compute_main_laps_pace(laps_group):
-    """Pace do bloco principal, removendo aquec/desaquec."""
+    """Pace do bloco principal.
+
+    Para treinos contínuos: remove aquec/desaquec (primeiro/último lap lento).
+    Para treinos intervalados (alta variância de pace): filtra laps de recuperação,
+    mantendo apenas os laps rápidos (≤ 120% da mediana dos laps do bloco).
+    """
     if laps_group.empty:
         return None
     laps = laps_group.sort_values("lap_index")
@@ -514,12 +519,26 @@ def compute_main_laps_pace(laps_group):
         return None
     if len(laps) <= 2:
         return float(laps["pace_sec_km"].mean())
-    mediana   = float(laps["pace_sec_km"].median())
-    threshold = mediana * 1.15
-    if len(laps) > 3 and float(laps.iloc[0]["pace_sec_km"]) > threshold:
+
+    mediana = float(laps["pace_sec_km"].median())
+
+    # Remove aquec/desaquec (só primeiro e último lap se >15% mais lentos)
+    if len(laps) > 3 and float(laps.iloc[0]["pace_sec_km"]) > mediana * 1.15:
         laps = laps.iloc[1:]
-    if len(laps) > 2 and float(laps.iloc[-1]["pace_sec_km"]) > threshold:
+    if len(laps) > 2 and float(laps.iloc[-1]["pace_sec_km"]) > mediana * 1.15:
         laps = laps.iloc[:-1]
+    if laps.empty:
+        return None
+
+    # Detecta treino intervalado: coef. de variação alto → existem laps de recuperação
+    mediana2 = float(laps["pace_sec_km"].median())
+    cv = float(laps["pace_sec_km"].std() / mediana2) if mediana2 > 0 else 0
+    if cv > 0.12 and len(laps) >= 4:
+        # Intervalado: manter apenas laps rápidos (≤ 120% da mediana = sem recuperações)
+        laps_rapidos = laps[laps["pace_sec_km"] <= mediana2 * 1.20]
+        if len(laps_rapidos) >= 2:
+            laps = laps_rapidos
+
     if laps.empty:
         return None
     total_dist = float(laps["distance_km"].sum())
