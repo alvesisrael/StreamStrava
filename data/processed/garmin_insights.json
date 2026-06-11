@@ -1,42 +1,179 @@
 {
-  "updated_at": "2026-06-10",
+  "updated_at": "2026-06-11",
   "race_predictions": {
-    "5K":           {"time": "17:52", "time_seconds": 1072},
-    "10K":          {"time": "37:41", "time_seconds": 2261},
-    "half_marathon": {"time": "1:24:10", "time_seconds": 5050},
-    "marathon":      {"time": "3:10:17", "time_seconds": 11417}
+    "5K": {
+      "time": "17:52",
+      "time_seconds": 1072
+    },
+    "10K": {
+      "time": "37:41",
+      "time_seconds": 2261
+    },
+    "half_marathon": {
+      "time": "1:24:10",
+      "time_seconds": 5050
+    },
+    "marathon": {
+      "time": "3:10:17",
+      "time_seconds": 11417
+    }
   },
-  "vo2max": {"current": 60.0, "previous": 59.0, "change": 1.0},
-  "rhr_today": 52,
+  "vo2max": {
+    "current": 60.0,
+    "previous": 60.0,
+    "change": 0.0
+  },
+  "rhr_today": 46,
   "body_battery": [
-    {"date": "2026-05-12", "charged": 51, "drained": 54},
-    {"date": "2026-05-13", "charged": 63, "drained": 72},
-    {"date": "2026-05-14", "charged": 58, "drained": 61},
-    {"date": "2026-05-15", "charged": 70, "drained": 65},
-    {"date": "2026-05-16", "charged": 62, "drained": 58},
-    {"date": "2026-05-17", "charged": 55, "drained": 63},
-    {"date": "2026-05-18", "charged": 67, "drained": 70},
-    {"date": "2026-05-19", "charged": 71, "drained": 55},
-    {"date": "2026-05-20", "charged": 59, "drained": 67},
-    {"date": "2026-05-21", "charged": 64, "drained": 60},
-    {"date": "2026-05-22", "charged": 53, "drained": 71},
-    {"date": "2026-05-23", "charged": 68, "drained": 58},
-    {"date": "2026-05-24", "charged": 72, "drained": 64},
-    {"date": "2026-05-25", "charged": 60, "drained": 69},
-    {"date": "2026-05-26", "charged": 65, "drained": 57},
-    {"date": "2026-05-27", "charged": 69, "drained": 63},
-    {"date": "2026-05-28", "charged": 69, "drained": 68},
-    {"date": "2026-05-29", "charged": 67, "drained": 67},
-    {"date": "2026-05-30", "charged": 68, "drained": 75},
-    {"date": "2026-05-31", "charged": 76, "drained": 47},
-    {"date": "2026-06-01", "charged": 54, "drained": 70},
-    {"date": "2026-06-02", "charged": 60, "drained": 68},
-    {"date": "2026-06-03", "charged": 47, "drained": 51},
-    {"date": "2026-06-04", "charged": 57, "drained": 73},
-    {"date": "2026-06-05", "charged": 67, "drained": 37},
-    {"date": "2026-06-06", "charged": 58, "drained": 87},
-    {"date": "2026-06-07", "charged": 48, "drained": 21},
-    {"date": "2026-06-08", "charged": 57, "drained": 46},
-    {"date": "2026-06-09", "charged": 0,  "drained": 26}
+    {
+      "date": "2026-05-13",
+      "charged": 68,
+      "drained": 66
+    },
+    {
+      "date": "2026-05-14",
+      "charged": 48,
+      "drained": 47
+    },
+    {
+      "date": "2026-05-15",
+      "charged": 43,
+      "drained": 68
+    },
+    {
+      "date": "2026-05-16",
+      "charged": 51,
+      "drained": 69
+    },
+    {
+      "date": "2026-05-17",
+      "charged": 70,
+      "drained": 29
+    },
+    {
+      "date": "2026-05-18",
+      "charged": 66,
+      "drained": 48
+    },
+    {
+      "date": "2026-05-19",
+      "charged": 42,
+      "drained": 64
+    },
+    {
+      "date": "2026-05-20",
+      "charged": 65,
+      "drained": 56
+    },
+    {
+      "date": "2026-05-21",
+      "charged": 59,
+      "drained": 76
+    },
+    {
+      "date": "2026-05-22",
+      "charged": 53,
+      "drained": 58
+    },
+    {
+      "date": "2026-05-23",
+      "charged": 68,
+      "drained": 71
+    },
+    {
+      "date": "2026-05-24",
+      "charged": 78,
+      "drained": 51
+    },
+    {
+      "date": "2026-05-25",
+      "charged": 42,
+      "drained": 53
+    },
+    {
+      "date": "2026-05-26",
+      "charged": 14,
+      "drained": 56
+    },
+    {
+      "date": "2026-05-27",
+      "charged": 68,
+      "drained": 74
+    },
+    {
+      "date": "2026-05-28",
+      "charged": 69,
+      "drained": 68
+    },
+    {
+      "date": "2026-05-29",
+      "charged": 67,
+      "drained": 67
+    },
+    {
+      "date": "2026-05-30",
+      "charged": 68,
+      "drained": 75
+    },
+    {
+      "date": "2026-05-31",
+      "charged": 76,
+      "drained": 47
+    },
+    {
+      "date": "2026-06-01",
+      "charged": 54,
+      "drained": 70
+    },
+    {
+      "date": "2026-06-02",
+      "charged": 60,
+      "drained": 68
+    },
+    {
+      "date": "2026-06-03",
+      "charged": 47,
+      "drained": 51
+    },
+    {
+      "date": "2026-06-04",
+      "charged": 57,
+      "drained": 73
+    },
+    {
+      "date": "2026-06-05",
+      "charged": 67,
+      "drained": 37
+    },
+    {
+      "date": "2026-06-06",
+      "charged": 58,
+      "drained": 87
+    },
+    {
+      "date": "2026-06-07",
+      "charged": 48,
+      "drained": 21
+    },
+    {
+      "date": "2026-06-08",
+      "charged": 57,
+      "drained": 46
+    },
+    {
+      "date": "2026-06-09",
+      "charged": 32,
+      "drained": 53
+    },
+    {
+      "date": "2026-06-10",
+      "charged": 34,
+      "drained": 58
+    },
+    {
+      "date": "2026-06-11",
+      "charged": 47,
+      "drained": 25
+    }
   ]
 }
