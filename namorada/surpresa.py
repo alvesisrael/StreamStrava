@@ -115,11 +115,14 @@ html = f"""
 
     /* INTRO */
     #intro {{
-      position: fixed; inset: 0; background: var(--black); z-index: 100;
+      position: sticky; top: 0;
+      width: 100%; height: 100vh;
+      background: var(--black); z-index: 100;
       display: flex; flex-direction: column; align-items: center; justify-content: center;
-      gap: 24px; cursor: pointer; transition: opacity 1.2s ease, visibility 1.2s ease;
+      gap: 24px; cursor: pointer;
+      transition: opacity 0.8s ease;
     }}
-    #intro.hidden {{ opacity: 0; visibility: hidden; }}
+    #intro.hidden {{ opacity: 0; pointer-events: none; margin-top: -100vh; }}
     .intro-logo {{
       font-family: 'Playfair Display', serif; font-size: clamp(14px,2vw,18px);
       letter-spacing: 0.4em; text-transform: uppercase; color: var(--gold);
@@ -494,9 +497,15 @@ html = f"""
   }})();
 
   function openCeremony() {{
-    document.getElementById('intro').classList.add('hidden');
-    const main = document.getElementById('main');
+    const intro = document.getElementById('intro');
+    const main  = document.getElementById('main');
+    intro.classList.add('hidden');
     main.classList.add('visible');
+
+    // Scroll pro topo do conteúdo após a transição
+    setTimeout(() => {{
+      main.scrollIntoView({{ behavior: 'smooth' }});
+    }}, 900);
 
     const io = new IntersectionObserver((entries) => {{
       entries.forEach(e => {{ if (e.isIntersecting) {{ e.target.classList.add('visible'); io.unobserve(e.target); }} }});
@@ -525,4 +534,4 @@ html = f"""
 </html>
 """
 
-components.html(html, height=99999, scrolling=False)
+components.html(html, height=5200, scrolling=True)
