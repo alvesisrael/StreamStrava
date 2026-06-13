@@ -877,13 +877,14 @@ def analyze_run(laps):
 
 # ══════════════════════════════════════════════════════════════════════════════
 
-tab_hoje, tab_desemp, tab_carga, tab_mapa, tab_hist, tab_sugerir = st.tabs([
+tab_hoje, tab_desemp, tab_carga, tab_mapa, tab_hist, tab_sugerir, tab_plano = st.tabs([
     "🏠 Dashboard",
     "⚡ Desempenho",
     "💓 Carga & Zonas",
     "🗺️ Mapa",
     "📋 Histórico",
     "🎯 Sugerir Rota",
+    "📅 Plano",
 ])
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -3994,3 +3995,364 @@ with tab_sugerir:
                 )
     else:
         st.caption("💡 Sem API Key, só as rotas do histórico ficam disponíveis. Funciona muito bem para quem já tem um bom volume de corridas!")
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  7 · PLANO DE TREINO  — importação via screenshot + calendário + PMC projetado
+# ══════════════════════════════════════════════════════════════════════════════
+with tab_plano:
+    import base64, json as _json
+    from datetime import date as _date, timedelta as _td
+
+    PLAN_FILE   = os.path.join(BASE, "training_plan.json")
+    RACE_DATE   = pd.Timestamp("2026-08-01")
+    DAYS_LEFT   = (RACE_DATE - pd.Timestamp.now()).days
+
+    # ── Intensity → estimated TRIMP per km ───────────────────────────────────
+    _INT_HR = {
+        "Muito Leve":    0.60, "Leve":          0.68,
+        "Moderado":      0.73, "Moderado Firme": 0.79,
+        "Moderado-firme":0.79, "Forte":          0.84,
+        "Muito Forte":   0.90, "Trote":          0.58,
+    }
+    _INT_PACE = {   # sec/km estimate for pace projection
+        "Muito Leve": 360, "Leve": 330, "Moderado": 310,
+        "Moderado Firme": 295, "Moderado-firme": 295,
+        "Forte": 280, "Muito Forte": 255, "Trote": 390,
+    }
+    def _est_load(dist_km: float, intensity: str) -> float:
+        hr_pct = _INT_HR.get(intensity, 0.73)
+        pace_s = _INT_PACE.get(intensity, 310)
+        dur_min = dist_km * pace_s / 60
+        hr_abs  = hr_pct * 195
+        return round(dur_min * (hr_abs - 45) / (195 - 45), 2)
+
+    # ── Load / save plan ──────────────────────────────────────────────────────
+    def _load_plan() -> list:
+        if os.path.exists(PLAN_FILE):
+            try:
+                with open(PLAN_FILE) as _f:
+                    return _json.load(_f)
+            except Exception:
+                pass
+        return []
+
+    def _save_plan(plan: list):
+        os.makedirs(os.path.dirname(PLAN_FILE), exist_ok=True)
+        with open(PLAN_FILE, "w") as _f:
+            _json.dump(plan, _f, ensure_ascii=False, indent=2)
+
+    # ── Groq vision extraction ────────────────────────────────────────────────
+    def _extract_from_screenshot(img_bytes: bytes, api_key: str) -> dict | None:
+        import requests as _req
+        b64 = base64.b64encode(img_bytes).decode()
+        prompt = """Analise esta screenshot de um app de prescrição de treinos e extraia os dados em JSON.
+Retorne SOMENTE o JSON, sem texto extra, no formato:
+{
+  "date": "YYYY-MM-DD",
+  "training_type": "Intervalado|Treino de Ritmo|Longo|Regenerativo|Corrida|etc",
+  "course": "Plano|Montanha|Trail",
+  "distance_km": 10.0,
+  "intensity": "Muito Leve|Leve|Moderado|Moderado Firme|Forte|Muito Forte",
+  "description": "resumo curto do treino (1 linha)",
+  "blocks": [
+    {"distance_km": 2.0, "intensity": "Moderado", "note": "aquecimento"},
+    {"reps": 3, "distance_km": 1.0, "intensity": "Muito Forte", "rest": "1:30min"},
+    {"distance_km": 1.0, "intensity": "Leve", "note": "soltura"}
+  ]
+}
+Se a data estiver no formato DD/MM/AAAA, converta para YYYY-MM-DD.
+Se não conseguir extrair algum campo, use null."""
+        try:
+            _r = _req.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={
+                    "model": "meta-llama/llama-4-scout-17b-16e-instruct",
+                    "messages": [{
+                        "role": "user",
+                        "content": [
+                            {"type": "image_url",
+                             "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+                            {"type": "text", "text": prompt}
+                        ]
+                    }],
+                    "max_tokens": 800, "temperature": 0.1,
+                },
+                timeout=30
+            )
+            _r.raise_for_status()
+            raw = _r.json()["choices"][0]["message"]["content"].strip()
+            # strip markdown code fences if present
+            if raw.startswith("```"):
+                raw = "\n".join(raw.split("\n")[1:])
+            if raw.endswith("```"):
+                raw = "\n".join(raw.split("\n")[:-1])
+            parsed = _json.loads(raw)
+            # Auto-compute training_load if missing
+            if parsed.get("distance_km") and parsed.get("intensity"):
+                parsed["training_load"] = _est_load(
+                    float(parsed["distance_km"]), parsed["intensity"]
+                )
+            return parsed
+        except Exception as _e:
+            return {"error": str(_e)}
+
+    # ─────────────────────────────────────────────────────────────────────────
+    st.title("📅 Plano de Treino")
+    st.caption(f"🏁 Paulo Lopes Trail 21K · **{RACE_DATE.strftime('%d/%m/%Y')}** · "
+               f"{'hoje!' if DAYS_LEFT == 0 else f'{DAYS_LEFT} dias'}")
+    st.markdown("---")
+
+    plan_data = _load_plan()
+
+    # ── Upload screenshots ────────────────────────────────────────────────────
+    with st.expander("📸 Importar treinos via screenshot", expanded=not bool(plan_data)):
+        st.markdown(
+            "Faça upload das screenshots do app do seu treinador. "
+            "O assistente extrai data, tipo, distância e intensidade automaticamente."
+        )
+        if not GROQ_KEY or len(GROQ_KEY) < 20:
+            st.warning("⚠️ Configure a chave Groq no sidebar para usar a extração automática.")
+        else:
+            uploaded = st.file_uploader(
+                "Screenshots do plano",
+                type=["png", "jpg", "jpeg"],
+                accept_multiple_files=True,
+                key="plan_upload"
+            )
+            if uploaded:
+                if st.button(f"🔍 Extrair {len(uploaded)} treino(s)", key="plan_extract_btn"):
+                    existing_dates = {s["date"] for s in plan_data if "date" in s}
+                    added = 0
+                    errors = []
+                    prog = st.progress(0)
+                    for i, f in enumerate(uploaded):
+                        with st.spinner(f"Lendo {f.name}..."):
+                            result = _extract_from_screenshot(f.read(), GROQ_KEY)
+                        if result and "error" not in result and result.get("date"):
+                            if result["date"] not in existing_dates:
+                                plan_data.append(result)
+                                existing_dates.add(result["date"])
+                                added += 1
+                            else:
+                                st.info(f"📅 {result['date']} já existe no plano — pulando.")
+                        else:
+                            errors.append(f"{f.name}: {result.get('error','sem data') if result else 'falha'}")
+                        prog.progress((i + 1) / len(uploaded))
+                    if added:
+                        plan_data.sort(key=lambda x: x.get("date", ""))
+                        _save_plan(plan_data)
+                        st.success(f"✅ {added} treino(s) importado(s) com sucesso!")
+                        st.rerun()
+                    if errors:
+                        for e in errors:
+                            st.error(f"❌ {e}")
+
+    if not plan_data:
+        st.info("📭 Nenhum treino planejado ainda. Importe screenshots acima.")
+        st.stop()
+
+    # ── Filter: only future + today ───────────────────────────────────────────
+    _today_str = _date.today().isoformat()
+    plan_df = pd.DataFrame(plan_data)
+    plan_df["date"] = pd.to_datetime(plan_df["date"], errors="coerce")
+    plan_df = plan_df.dropna(subset=["date"]).sort_values("date")
+
+    plan_future = plan_df[plan_df["date"] >= pd.Timestamp(_today_str)].copy()
+    plan_past   = plan_df[plan_df["date"] <  pd.Timestamp(_today_str)].copy()
+
+    col_stat1, col_stat2, col_stat3, col_stat4 = st.columns(4)
+    col_stat1.metric("📋 Treinos planejados", len(plan_df))
+    col_stat2.metric("⏳ Ainda por fazer", len(plan_future))
+    col_stat3.metric("✅ Já realizados (plano)", len(plan_past))
+    _total_plan_km = plan_df["distance_km"].sum() if "distance_km" in plan_df.columns else 0
+    col_stat4.metric("📏 KM totais planejados", f"{_total_plan_km:.0f} km")
+
+    st.markdown("---")
+
+    # ── PMC PROJETADO ─────────────────────────────────────────────────────────
+    st.subheader("📈 PMC Projetado até a prova")
+
+    _pmc_real = calc_pmc(df_run_all)
+    if not _pmc_real.empty and "training_load" in plan_df.columns:
+        # Build daily load series: real history + planned future
+        _real_end = _pmc_real.index.max()
+        _proj_start = max(_real_end + pd.Timedelta(days=1), pd.Timestamp(_today_str))
+
+        # Future planned loads
+        _fut_loads = {}
+        for _, row in plan_future.iterrows():
+            d = row["date"]
+            tl = row.get("training_load") or (
+                _est_load(float(row["distance_km"]), str(row.get("intensity","Moderado")))
+                if pd.notna(row.get("distance_km")) else 0
+            )
+            _fut_loads[d.normalize()] = _fut_loads.get(d.normalize(), 0) + float(tl or 0)
+
+        # Extend PMC from last real value
+        _last = _pmc_real.iloc[-1]
+        _ctl, _atl = float(_last["CTL"]), float(_last["ATL"])
+        k_ctl, k_atl = 2/(42+1), 2/(7+1)
+
+        _proj_rows = []
+        _cur_day = _proj_start.normalize()
+        _end_day  = RACE_DATE + pd.Timedelta(days=1)
+        while _cur_day <= _end_day:
+            _tl = _fut_loads.get(_cur_day, 0.0)
+            _ctl = _ctl + k_ctl * (_tl - _ctl)
+            _atl = _atl + k_atl * (_tl - _atl)
+            _proj_rows.append({"date": _cur_day, "CTL": _ctl, "ATL": _atl,
+                                "TSB": _ctl - _atl, "load": _tl, "projected": True})
+            _cur_day += pd.Timedelta(days=1)
+
+        _pmc_proj = pd.DataFrame(_proj_rows).set_index("date")
+
+        # Combine real + projected for chart
+        _pmc_plot = _pmc_real.copy()
+        _pmc_plot["projected"] = False
+        _comb = pd.concat([_pmc_plot, _pmc_proj])
+        _comb = _comb[_comb.index >= pd.Timestamp(_today_str) - pd.Timedelta(days=30)]
+
+        _real_part = _comb[~_comb["projected"]]
+        _proj_part = _comb[_comb["projected"]]
+
+        fig_pmc = go.Figure()
+        # Real CTL
+        fig_pmc.add_scatter(x=_real_part.index, y=_real_part["CTL"],
+                            name="CTL (real)", line=dict(color=BLUE, width=2.5))
+        # Projected CTL (dashed)
+        fig_pmc.add_scatter(x=_proj_part.index, y=_proj_part["CTL"],
+                            name="CTL (projetado)", line=dict(color=BLUE, width=2, dash="dash"))
+        # Real TSB
+        fig_pmc.add_scatter(x=_real_part.index, y=_real_part["TSB"],
+                            name="TSB (real)", line=dict(color=GREEN, width=1.5))
+        # Projected TSB (dashed)
+        fig_pmc.add_scatter(x=_proj_part.index, y=_proj_part["TSB"],
+                            name="TSB (projetado)", line=dict(color=GREEN, width=1.5, dash="dash"))
+        # Race day marker
+        fig_pmc.add_vline(x=RACE_DATE, line_dash="dot", line_color=RED,
+                          annotation_text="🏁 Paulo Lopes 01/08",
+                          annotation_position="top right")
+        # TSB target zone
+        fig_pmc.add_hrect(y0=5, y1=20, fillcolor="rgba(46,204,113,0.08)",
+                          line_width=0, annotation_text="TSB ideal prova",
+                          annotation_position="right")
+        fig_pmc.update_layout(
+            title="CTL e TSB: histórico real + projeção com plano de treino",
+            height=350, margin=dict(t=45, b=10, l=0, r=0),
+            legend=dict(orientation="h", y=-0.15),
+            xaxis=dict(showgrid=False),
+        )
+        # Show projected CTL and TSB on race day
+        if not _proj_part.empty:
+            _race_row = _proj_part[_proj_part.index.normalize() == RACE_DATE.normalize()]
+            if not _race_row.empty:
+                _ctl_race = _race_row["CTL"].iloc[0]
+                _tsb_race = _race_row["TSB"].iloc[0]
+                _tsb_status = (
+                    "✅ Na janela ideal (+5 a +20)" if 5 <= _tsb_race <= 20
+                    else ("⚠️ Muito descansado (>+20)" if _tsb_race > 20
+                          else "🔴 Estressado (<+5)" if _tsb_race < -15
+                          else "⚠️ Abaixo do ideal (<+5)")
+                )
+                _r1, _r2, _r3 = st.columns(3)
+                _r1.metric("🏋️ CTL na prova (proj.)", f"{_ctl_race:.1f}")
+                _r2.metric("🎯 TSB na prova (proj.)", f"{_tsb_race:.1f}", _tsb_status,
+                           delta_color="normal" if 5 <= _tsb_race <= 20 else "inverse")
+                _r3.metric("📅 Dias até prova", str(DAYS_LEFT))
+        st.plotly_chart(fig_pmc, use_container_width=True)
+    elif _pmc_real.empty:
+        st.info("PMC real não disponível — rode um treino primeiro.")
+    else:
+        st.info("Treinos sem training_load estimado — verifique a importação.")
+
+    st.markdown("---")
+
+    # ── CALENDÁRIO DE TREINOS FUTUROS ─────────────────────────────────────────
+    st.subheader("🗓️ Próximos treinos")
+
+    _INT_COLOR_PLAN = {
+        "Muito Leve": "#27AE60", "Leve": "#2ECC71",
+        "Moderado": "#F1C40F", "Moderado Firme": "#E67E22", "Moderado-firme": "#E67E22",
+        "Forte": "#E74C3C", "Muito Forte": "#922B21", "Trote": "#1ABC9C",
+    }
+
+    # Group by week
+    plan_future["week"] = plan_future["date"].dt.to_period("W")
+    for _wk, _wk_df in plan_future.groupby("week"):
+        _wk_start = _wk.start_time.strftime("%d/%m")
+        _wk_end   = _wk.end_time.strftime("%d/%m")
+        _wk_km    = _wk_df["distance_km"].sum() if "distance_km" in _wk_df.columns else 0
+        _wk_load  = _wk_df["training_load"].sum() if "training_load" in _wk_df.columns else 0
+        with st.expander(
+            f"📅 Semana {_wk_start}–{_wk_end} · {_wk_km:.0f} km · carga estimada {_wk_load:.0f}",
+            expanded=(_wk == plan_future["week"].iloc[0])
+        ):
+            for _, row in _wk_df.sort_values("date").iterrows():
+                _dt   = row["date"]
+                _dow  = ["Seg","Ter","Qua","Qui","Sex","Sáb","Dom"][_dt.weekday()]
+                _int  = row.get("intensity") or "Moderado"
+                _col  = _INT_COLOR_PLAN.get(str(_int), "#7F8C8D")
+                _km   = row.get("distance_km")
+                _type = row.get("training_type") or row.get("type") or "Corrida"
+                _desc = row.get("description") or ""
+                _tl   = row.get("training_load")
+
+                # Check if completed (matched against real activities)
+                _completed = False
+                if not df_run.empty:
+                    _same_day = df_run[df_run["start_date"].dt.date == _dt.date()]
+                    _completed = len(_same_day) > 0
+
+                _done_icon = "✅" if _completed else "⏳"
+                st.markdown(
+                    f"{_done_icon} **{_dow} {_dt.strftime('%d/%m')}** "
+                    f"— <span style='color:{_col};font-weight:bold'>{_int}</span> "
+                    f"· {_type}"
+                    + (f" · **{_km:.0f} km**" if _km else "")
+                    + (f" · carga ~{_tl:.0f}" if _tl else ""),
+                    unsafe_allow_html=True
+                )
+                if _desc:
+                    st.caption(f"   {_desc}")
+
+                # Blocks detail (se disponível)
+                _blocks = row.get("blocks")
+                if _blocks and isinstance(_blocks, list) and len(_blocks) > 0:
+                    _block_lines = []
+                    for b in _blocks:
+                        if not isinstance(b, dict):
+                            continue
+                        _bi = str(b.get("intensity",""))
+                        _bc = _INT_COLOR_PLAN.get(_bi, "#aaa")
+                        if b.get("reps"):
+                            _block_lines.append(
+                                f"<span style='color:{_bc}'>● {b['reps']}×{b.get('distance_km','')}km {_bi}"
+                                + (f" (rec {b['rest']})" if b.get("rest") else "") + "</span>"
+                            )
+                        elif b.get("distance_km"):
+                            _note = b.get("note","")
+                            _block_lines.append(
+                                f"<span style='color:{_bc}'>● {b['distance_km']}km {_bi}"
+                                + (f" — {_note}" if _note else "") + "</span>"
+                            )
+                    if _block_lines:
+                        st.markdown("&nbsp;&nbsp;&nbsp;" + " &nbsp; ".join(_block_lines), unsafe_allow_html=True)
+                st.divider()
+
+    # ── MANAGE PLAN ───────────────────────────────────────────────────────────
+    with st.expander("🗑️ Gerenciar plano (remover treinos)"):
+        if plan_data:
+            _del_opts = {
+                f"{s.get('date','')} — {s.get('training_type','?')} {s.get('distance_km','?')}km": i
+                for i, s in enumerate(plan_data)
+            }
+            _to_del = st.multiselect("Selecione para remover:", list(_del_opts.keys()),
+                                     key="plan_del_select")
+            if _to_del and st.button("🗑️ Remover selecionados", key="plan_del_btn"):
+                _idxs = sorted({_del_opts[k] for k in _to_del}, reverse=True)
+                for _i in _idxs:
+                    plan_data.pop(_i)
+                _save_plan(plan_data)
+                st.success("Removido(s).")
+                st.rerun()
