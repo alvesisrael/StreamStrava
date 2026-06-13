@@ -4045,22 +4045,36 @@ with tab_plano:
     def _extract_from_screenshot(img_bytes: bytes, api_key: str) -> dict | None:
         import requests as _req
         b64 = base64.b64encode(img_bytes).decode()
-        prompt = """Analise esta screenshot de um app de prescrição de treinos e extraia os dados em JSON.
-Retorne SOMENTE o JSON, sem texto extra, no formato:
+        prompt = """Você é um extrator preciso de treinos esportivos. Analise esta screenshot de um app de prescrição de treinos e extraia TODOS os dados visíveis em JSON.
+
+REGRAS CRÍTICAS:
+1. Copie fielmente TODO o texto da descrição/observações do treinador — não resuma, não omita
+2. Capture a altimetria/elevation SEMPRE que aparecer (ex: "900-1200m D+", "150-200m D+-")
+3. Para blocos de intervalos: capture reps, distância, intensidade e tempo de descanso EXATOS
+4. Para intensidade dos blocos use exatamente como escrito: "Muito Leve", "Leve", "Moderado", "Forte", "Muito Forte", "Trote leve", etc.
+5. O campo "title" é o título em negrito do treino (ex: "Pirâmide sobe e desce", "Foco nas descidas")
+6. O campo "description" deve conter TODO o texto descritivo, incluindo objetivos, observações e instruções do treinador
+7. Converta datas DD/MM/AAAA para YYYY-MM-DD
+
+Retorne SOMENTE o JSON neste formato (sem texto extra, sem markdown):
 {
   "date": "YYYY-MM-DD",
+  "title": "título em negrito do treino ou null",
   "training_type": "Intervalado|Treino de Ritmo|Longo|Regenerativo|Corrida|etc",
-  "course": "Plano|Montanha|Trail",
+  "course": "texto exato do campo Percurso",
   "distance_km": 10.0,
-  "intensity": "Muito Leve|Leve|Moderado|Moderado Firme|Forte|Muito Forte",
-  "description": "resumo curto do treino (1 linha)",
+  "elevation_gain": "texto exato da altimetria (ex: 900-1200m D+) ou null",
+  "intensity": "texto exato do campo Intensidade",
+  "description": "TODO o texto descritivo do treino, incluindo objetivos e observações do treinador",
   "blocks": [
-    {"distance_km": 2.0, "intensity": "Moderado", "note": "aquecimento"},
-    {"reps": 3, "distance_km": 1.0, "intensity": "Muito Forte", "rest": "1:30min"},
-    {"distance_km": 1.0, "intensity": "Leve", "note": "soltura"}
+    {"distance_km": 3.0, "intensity": "Muito Leve", "note": "aquecimento"},
+    {"reps": 5, "distance_km": 0.1, "intensity": "Muito Forte", "rest": "0:45seg"},
+    {"reps": 5, "distance_km": 0.2, "intensity": "Muito Forte", "rest": "1:00min"},
+    {"distance_km": 2.0, "intensity": "Trote leve", "note": "soltura"}
   ]
 }
-Se a data estiver no formato DD/MM/AAAA, converta para YYYY-MM-DD.
+
+Se não houver blocos estruturados, use blocks: [].
 Se não conseguir extrair algum campo, use null."""
         try:
             _r = _req.post(
@@ -4076,7 +4090,7 @@ Se não conseguir extrair algum campo, use null."""
                             {"type": "text", "text": prompt}
                         ]
                     }],
-                    "max_tokens": 800, "temperature": 0.1,
+                    "max_tokens": 2000, "temperature": 0.0,
                 },
                 timeout=30
             )
@@ -4293,14 +4307,16 @@ Se não conseguir extrair algum campo, use null."""
             expanded=(_wk == plan_future["week"].iloc[0])
         ):
             for _, row in _wk_df.sort_values("date").iterrows():
-                _dt   = row["date"]
-                _dow  = ["Seg","Ter","Qua","Qui","Sex","Sáb","Dom"][_dt.weekday()]
-                _int  = row.get("intensity") or "Moderado"
-                _col  = _INT_COLOR_PLAN.get(str(_int), "#7F8C8D")
-                _km   = row.get("distance_km")
-                _type = row.get("training_type") or row.get("type") or "Corrida"
-                _desc = row.get("description") or ""
-                _tl   = row.get("training_load")
+                _dt    = row["date"]
+                _dow   = ["Seg","Ter","Qua","Qui","Sex","Sáb","Dom"][_dt.weekday()]
+                _int   = row.get("intensity") or "Moderado"
+                _col   = _INT_COLOR_PLAN.get(str(_int), "#7F8C8D")
+                _km    = row.get("distance_km")
+                _type  = row.get("training_type") or row.get("type") or "Corrida"
+                _title = row.get("title") or ""
+                _desc  = row.get("description") or ""
+                _elev  = row.get("elevation_gain") or ""
+                _tl    = row.get("training_load")
 
                 # Check if completed (matched against real activities)
                 _completed = False
@@ -4309,16 +4325,23 @@ Se não conseguir extrair algum campo, use null."""
                     _completed = len(_same_day) > 0
 
                 _done_icon = "✅" if _completed else "⏳"
-                st.markdown(
+                _header_line = (
                     f"{_done_icon} **{_dow} {_dt.strftime('%d/%m')}** "
                     f"— <span style='color:{_col};font-weight:bold'>{_int}</span> "
                     f"· {_type}"
                     + (f" · **{_km:.0f} km**" if _km else "")
-                    + (f" · carga ~{_tl:.0f}" if _tl else ""),
-                    unsafe_allow_html=True
+                    + (f" · 📐 {_elev}" if _elev else "")
+                    + (f" · carga ~{_tl:.0f}" if _tl else "")
                 )
+                st.markdown(_header_line, unsafe_allow_html=True)
+                if _title:
+                    st.markdown(f"&nbsp;&nbsp;&nbsp;**{_title}**")
                 if _desc:
-                    st.caption(f"   {_desc}")
+                    # Show full description preserving newlines
+                    for _line in str(_desc).split("\n"):
+                        _line = _line.strip()
+                        if _line:
+                            st.caption(f"   {_line}")
 
                 # Blocks detail (se disponível)
                 _blocks = row.get("blocks")
