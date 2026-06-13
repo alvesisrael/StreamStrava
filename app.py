@@ -4175,114 +4175,265 @@ Se não conseguir extrair algum campo, use null."""
     plan_future = plan_df[plan_df["date"] >= pd.Timestamp(_today_str)].copy()
     plan_past   = plan_df[plan_df["date"] <  pd.Timestamp(_today_str)].copy()
 
-    col_stat1, col_stat2, col_stat3, col_stat4 = st.columns(4)
-    col_stat1.metric("📋 Treinos planejados", len(plan_df))
-    col_stat2.metric("⏳ Ainda por fazer", len(plan_future))
-    col_stat3.metric("✅ Já realizados (plano)", len(plan_past))
-    _total_plan_km = plan_df["distance_km"].sum() if "distance_km" in plan_df.columns else 0
-    col_stat4.metric("📏 KM totais planejados", f"{_total_plan_km:.0f} km")
+    # ═══════════════════════════════════════════════════════════════════════
+    #  ANALYTICS DO PLANO — KPIs de treinador
+    # ═══════════════════════════════════════════════════════════════════════
+
+    # ── Calcula métricas do plano ─────────────────────────────────────────
+    _total_plan_km  = float(plan_df["distance_km"].sum()) if "distance_km" in plan_df.columns else 0
+    _total_fut_km   = float(plan_future["distance_km"].sum()) if not plan_future.empty and "distance_km" in plan_future.columns else 0
+    _has_elev       = "elevation_gain" in plan_df.columns
+
+    # D+ total (parse "900-1200m D+" → take first number)
+    def _parse_elev(s):
+        import re as _re
+        if not s or str(s) in ("None","nan",""): return 0.0
+        nums = _re.findall(r"[\d]+", str(s).replace(".","").replace(",",""))
+        return float(nums[0]) if nums else 0.0
+    if _has_elev:
+        plan_df["_elev_m"] = plan_df["elevation_gain"].apply(_parse_elev)
+    else:
+        plan_df["_elev_m"] = 0.0
+
+    _total_dplus    = plan_df["_elev_m"].sum()
+    _n_weeks_plan   = max(1, int(plan_df["date"].dt.to_period("W").nunique()))
+    _avg_km_week    = _total_plan_km / _n_weeks_plan
+    _avg_dplus_week = _total_dplus / _n_weeks_plan
+
+    # PMC real
+    _pmc_real = calc_pmc(_runs_raw)
+    _pmc_real = _pmc_real.copy() if not _pmc_real.empty else _pmc_real
+    if not _pmc_real.empty:
+        _pmc_real["Data"] = pd.to_datetime(_pmc_real["Data"])
+        _last_real = _pmc_real.iloc[-1]
+        _ctl_now   = float(_last_real["CTL"])
+        _atl_now   = float(_last_real["ATL"])
+        _tsb_now   = float(_last_real["TSB"])
+        _acwr_now  = round(_atl_now / _ctl_now, 2) if _ctl_now > 0 else 0.0
+        # Weekly CTL ramp (last 4 weeks avg change)
+        _pmc_28d = _pmc_real[_pmc_real["Data"] >= _pmc_real["Data"].max() - pd.Timedelta(days=28)]
+        _ramp    = (_pmc_28d["CTL"].iloc[-1] - _pmc_28d["CTL"].iloc[0]) / max(1, len(_pmc_28d)/7) if len(_pmc_28d) > 1 else 0
+    else:
+        _ctl_now = _atl_now = _tsb_now = _acwr_now = _ramp = 0.0
+
+    # ACWR status
+    if   _acwr_now < 0.8:  _acwr_label, _acwr_color = "Destreino", "gray"
+    elif _acwr_now <= 1.3: _acwr_label, _acwr_color = "✅ Zona segura", "green"
+    elif _acwr_now <= 1.5: _acwr_label, _acwr_color = "⚠️ Atenção", "orange"
+    else:                   _acwr_label, _acwr_color = "🔴 Risco lesão", "red"
+
+    # TSB status
+    if   _tsb_now >  20: _tsb_label = "Descansado"
+    elif _tsb_now >=  5: _tsb_label = "✅ Forma"
+    elif _tsb_now >=  0: _tsb_label = "Neutro"
+    elif _tsb_now >= -10:_tsb_label = "Treinando"
+    else:                _tsb_label = "⚠️ Acumulado"
+
+    # Ramp label
+    _ramp_label = f"+{_ramp:.1f}/sem" if _ramp >= 0 else f"{_ramp:.1f}/sem"
+    _ramp_ok    = abs(_ramp) <= 2.0  # safe ramp ≤ 2 CTL pts/week
+
+    # Intensity distribution
+    if "intensity" in plan_df.columns:
+        _int_counts = plan_df["intensity"].value_counts()
+        _int_pct    = (_int_counts / _int_counts.sum() * 100).round(0).astype(int)
+    else:
+        _int_counts = pd.Series(dtype=int)
+        _int_pct    = pd.Series(dtype=int)
+
+    # 80/20 rule: % easy vs hard
+    _easy_labels = {"Muito Leve","Leve","Trote","Trote/Regenerativo","Regenerativo"}
+    _hard_labels = {"Forte","Muito Forte","Moderado Firme","Moderado-firme"}
+    _n_easy = sum(_int_counts.get(l, 0) for l in _easy_labels)
+    _n_hard = sum(_int_counts.get(l, 0) for l in _hard_labels)
+    _n_mod  = len(plan_df) - _n_easy - _n_hard
+    _pct_easy = round(100*_n_easy/len(plan_df)) if len(plan_df) else 0
+    _pct_hard = round(100*_n_hard/len(plan_df)) if len(plan_df) else 0
+
+    # ── ROW 1: Forma atual (dados reais) ─────────────────────────────────
+    st.markdown("#### 📊 Forma atual")
+    _c1,_c2,_c3,_c4,_c5 = st.columns(5)
+    _c1.metric("🏋️ CTL (fitness)",    f"{_ctl_now:.1f}",  help="Carga crônica (42 dias). Quanto maior, melhor a base.")
+    _c2.metric("😓 ATL (fadiga)",      f"{_atl_now:.1f}",  help="Carga aguda (7 dias). Alta = cansado.")
+    _c3.metric("⚡ TSB (forma)",       f"{_tsb_now:.1f}",  _tsb_label, help="CTL−ATL. +5 a +20 = janela de pico.")
+    _c4.metric("⚖️ ACWR",             f"{_acwr_now:.2f}", _acwr_label, help="ATL/CTL. 0.8–1.3 = zona segura.")
+    _c5.metric("📈 Ramp Rate/sem",     _ramp_label,
+               "✅ Seguro" if _ramp_ok else "⚠️ Carregando rápido",
+               help="Variação CTL/semana. >2 pts/sem = risco de sobrecarga.")
+
+    st.markdown("#### 📋 Plano mapeado")
+    _d1,_d2,_d3,_d4,_d5 = st.columns(5)
+    _d1.metric("📅 Treinos",          f"{len(plan_df)}", f"{len(plan_future)} restantes")
+    _d2.metric("📏 KM total",          f"{_total_plan_km:.0f} km", f"~{_avg_km_week:.0f} km/sem")
+    _d3.metric("📐 D+ total",          f"{_total_dplus:.0f} m" if _total_dplus else "—",
+               f"~{_avg_dplus_week:.0f} m/sem" if _total_dplus else None)
+    _d4.metric("🗓️ Semanas",          str(_n_weeks_plan))
+    _d5.metric("🎯 Distribuição",      f"{_pct_easy}% leve · {_pct_hard}% forte",
+               help="Regra 80/20: ideal ≈ 80% leve, 20% forte.")
 
     st.markdown("---")
 
-    # ── PMC PROJETADO ─────────────────────────────────────────────────────────
-    st.subheader("📈 PMC Projetado até a prova")
+    # ── PMC: últimos 45 dias reais + projeção apenas até fim do plano ─────
+    if not _pmc_real.empty:
+        st.markdown("#### 📈 CTL / TSB — histórico + projeção do plano")
 
-    _pmc_real = calc_pmc(_runs_raw)   # returns DataFrame with "Data","CTL","ATL","TSB" columns
-    if not _pmc_real.empty and "training_load" in plan_df.columns:
-        # calc_pmc returns integer-indexed DF with "Data" column (Timestamp)
-        _pmc_real = _pmc_real.copy()
-        _pmc_real["Data"] = pd.to_datetime(_pmc_real["Data"])
+        # Projeção vai apenas até o último treino planejado + 7 dias
+        _proj_end = (plan_future["date"].max() + pd.Timedelta(days=7)) if not plan_future.empty                     else pd.Timestamp(_today_str) + pd.Timedelta(days=14)
+        _real_end    = _pmc_real["Data"].max()
+        _proj_start  = max(_real_end + pd.Timedelta(days=1), pd.Timestamp(_today_str))
 
-        _real_end   = _pmc_real["Data"].max()
-        _proj_start = max(_real_end + pd.Timedelta(days=1), pd.Timestamp(_today_str))
-
-        # Future planned loads
         _fut_loads = {}
         for _, row in plan_future.iterrows():
-            d = row["date"]
+            d  = row["date"]
             tl = row.get("training_load") or (
                 _est_load(float(row["distance_km"]), str(row.get("intensity","Moderado")))
                 if pd.notna(row.get("distance_km")) else 0
             )
             _fut_loads[d.normalize()] = _fut_loads.get(d.normalize(), 0) + float(tl or 0)
 
-        # Extend PMC from last real values
-        _last = _pmc_real.iloc[-1]
-        _ctl, _atl = float(_last["CTL"]), float(_last["ATL"])
+        _last_r  = _pmc_real.iloc[-1]
+        _pc, _pa = float(_last_r["CTL"]), float(_last_r["ATL"])
         k_ctl, k_atl = 2/(42+1), 2/(7+1)
 
         _proj_rows = []
-        _cur_day = pd.Timestamp(_proj_start).normalize()
-        _end_day  = RACE_DATE + pd.Timedelta(days=1)
-        while _cur_day <= _end_day:
-            _tl = _fut_loads.get(_cur_day, 0.0)
-            _ctl = _ctl + k_ctl * (_tl - _ctl)
-            _atl = _atl + k_atl * (_tl - _atl)
-            _proj_rows.append({"Data": _cur_day, "CTL": _ctl, "ATL": _atl,
-                                "TSB": _ctl - _atl, "load": _tl, "projected": True})
-            _cur_day += pd.Timedelta(days=1)
-
+        _cur = pd.Timestamp(_proj_start).normalize()
+        while _cur <= _proj_end:
+            _tl   = _fut_loads.get(_cur, 0.0)
+            _pc   = _pc + k_ctl * (_tl - _pc)
+            _pa   = _pa + k_atl * (_tl - _pa)
+            _acwr = round(_pa/_pc, 2) if _pc > 0 else 0
+            _proj_rows.append({"Data": _cur, "CTL": round(_pc,1), "ATL": round(_pa,1),
+                               "TSB": round(_pc-_pa,1), "ACWR": _acwr, "load": _tl})
+            _cur += pd.Timedelta(days=1)
         _pmc_proj = pd.DataFrame(_proj_rows)
 
-        # Combine real + projected for chart (use "Data" column throughout)
-        _pmc_real["projected"] = False
-        _comb = pd.concat([_pmc_real, _pmc_proj], ignore_index=True)
-        _comb["Data"] = pd.to_datetime(_comb["Data"])
-        _cutoff = pd.Timestamp(_today_str) - pd.Timedelta(days=30)
-        _comb = _comb[_comb["Data"] >= _cutoff]
+        # Show only last 45 real days + projected
+        _cutoff = pd.Timestamp(_today_str) - pd.Timedelta(days=45)
+        _real_show = _pmc_real[_pmc_real["Data"] >= _cutoff]
 
-        _real_part = _comb[_comb["projected"] == False]
-        _proj_part = _comb[_comb["projected"] == True]
+        # ── PMC chart (CTL + TSB)
+        _fig_pmc = go.Figure()
+        _fig_pmc.add_scatter(x=_real_show["Data"], y=_real_show["CTL"],
+                             name="CTL (real)", line=dict(color=BLUE, width=2.5))
+        if not _pmc_proj.empty:
+            _fig_pmc.add_scatter(x=_pmc_proj["Data"], y=_pmc_proj["CTL"],
+                                 name="CTL (plano)", line=dict(color=BLUE, width=2, dash="dash"))
+        _fig_pmc.add_scatter(x=_real_show["Data"], y=_real_show["TSB"],
+                             name="TSB (real)", line=dict(color=GREEN, width=1.5))
+        if not _pmc_proj.empty:
+            _fig_pmc.add_scatter(x=_pmc_proj["Data"], y=_pmc_proj["TSB"],
+                                 name="TSB (plano)", line=dict(color=GREEN, width=1.5, dash="dash"))
+        # TSB zones
+        _fig_pmc.add_hrect(y0=5, y1=20, fillcolor="rgba(46,204,113,0.07)", line_width=0,
+                           annotation_text="Forma ideal", annotation_position="right")
+        _fig_pmc.add_hline(y=0, line_dash="dot", line_color="gray", line_width=1)
+        _fig_pmc.update_layout(height=310, margin=dict(t=10,b=10,l=0,r=0),
+                               legend=dict(orientation="h", y=-0.2),
+                               xaxis=dict(showgrid=False))
+        st.plotly_chart(_fig_pmc, use_container_width=True)
 
-        fig_pmc = go.Figure()
-        # Real CTL
-        fig_pmc.add_scatter(x=_real_part["Data"], y=_real_part["CTL"],
-                            name="CTL (real)", line=dict(color=BLUE, width=2.5))
-        # Projected CTL (dashed)
-        fig_pmc.add_scatter(x=_proj_part["Data"], y=_proj_part["CTL"],
-                            name="CTL (projetado)", line=dict(color=BLUE, width=2, dash="dash"))
-        # Real TSB
-        fig_pmc.add_scatter(x=_real_part["Data"], y=_real_part["TSB"],
-                            name="TSB (real)", line=dict(color=GREEN, width=1.5))
-        # Projected TSB (dashed)
-        fig_pmc.add_scatter(x=_proj_part["Data"], y=_proj_part["TSB"],
-                            name="TSB (projetado)", line=dict(color=GREEN, width=1.5, dash="dash"))
-        # Race day marker
-        fig_pmc.add_vline(x=RACE_DATE, line_dash="dot", line_color=RED,
-                          annotation_text="🏁 Paulo Lopes 01/08",
-                          annotation_position="top right")
-        # TSB target zone
-        fig_pmc.add_hrect(y0=5, y1=20, fillcolor="rgba(46,204,113,0.08)",
-                          line_width=0, annotation_text="TSB ideal prova",
-                          annotation_position="right")
-        fig_pmc.update_layout(
-            title="CTL e TSB: histórico real + projeção com plano de treino",
-            height=350, margin=dict(t=45, b=10, l=0, r=0),
-            legend=dict(orientation="h", y=-0.15),
-            xaxis=dict(showgrid=False),
-        )
-        # Show projected CTL and TSB on race day
-        if not _proj_part.empty:
-            _race_row = _proj_part[pd.to_datetime(_proj_part["Data"]).dt.normalize() == RACE_DATE.normalize()]
-            if not _race_row.empty:
-                _ctl_race = _race_row["CTL"].iloc[0]
-                _tsb_race = _race_row["TSB"].iloc[0]
-                _tsb_status = (
-                    "✅ Na janela ideal (+5 a +20)" if 5 <= _tsb_race <= 20
-                    else ("⚠️ Muito descansado (>+20)" if _tsb_race > 20
-                          else "🔴 Estressado (<+5)" if _tsb_race < -15
-                          else "⚠️ Abaixo do ideal (<+5)")
-                )
-                _r1, _r2, _r3 = st.columns(3)
-                _r1.metric("🏋️ CTL na prova (proj.)", f"{_ctl_race:.1f}")
-                _r2.metric("🎯 TSB na prova (proj.)", f"{_tsb_race:.1f}", _tsb_status,
-                           delta_color="normal" if 5 <= _tsb_race <= 20 else "inverse")
-                _r3.metric("📅 Dias até prova", str(DAYS_LEFT))
-        st.plotly_chart(fig_pmc, use_container_width=True)
-    elif _pmc_real.empty:
-        st.info("PMC real não disponível — rode um treino primeiro.")
+        # ── ACWR chart (risco de lesão)
+        if not _pmc_proj.empty:
+            st.markdown("#### ⚖️ ACWR — risco de sobrecarga por semana do plano")
+            _fig_acwr = go.Figure()
+            # Current real ACWR
+            _real_show_acwr = _real_show.copy()
+            _real_show_acwr["ACWR"] = _real_show_acwr["ATL"] / _real_show_acwr["CTL"].replace(0, float("nan"))
+            _fig_acwr.add_scatter(x=_real_show_acwr["Data"], y=_real_show_acwr["ACWR"],
+                                  name="ACWR real", line=dict(color=BLUE, width=2))
+            _fig_acwr.add_scatter(x=_pmc_proj["Data"], y=_pmc_proj["ACWR"],
+                                  name="ACWR plano", line=dict(color=ORANGE, width=2, dash="dash"))
+            _fig_acwr.add_hrect(y0=0.8, y1=1.3, fillcolor="rgba(46,204,113,0.10)", line_width=0,
+                                annotation_text="✅ Zona segura", annotation_position="right")
+            _fig_acwr.add_hrect(y0=1.3, y1=1.5, fillcolor="rgba(243,156,18,0.10)", line_width=0,
+                                annotation_text="⚠️ Atenção", annotation_position="right")
+            _fig_acwr.add_hrect(y0=1.5, y1=2.5, fillcolor="rgba(231,76,60,0.10)", line_width=0,
+                                annotation_text="🔴 Risco", annotation_position="right")
+            _fig_acwr.update_layout(height=220, margin=dict(t=10,b=10,l=0,r=0),
+                                    legend=dict(orientation="h", y=-0.25),
+                                    xaxis=dict(showgrid=False), yaxis=dict(range=[0, 2.2]))
+            st.plotly_chart(_fig_acwr, use_container_width=True)
+
+    # ── Volume semanal: real + planejado ─────────────────────────────────
+    st.markdown("#### 📦 Volume semanal — km e D+")
+
+    # Real weekly volume (last 12 weeks)
+    if not df_run.empty:
+        _rw = (df_run[["start_date","distance_km","elevation_gain"]].copy())
+        _rw["Sem"] = _rw["start_date"].dt.to_period("W")
+        _rw_grp = _rw.groupby("Sem").agg(
+            km=("distance_km","sum"), dplus=("elevation_gain","sum")
+        ).reset_index()
+        _rw_grp["Sem_str"] = _rw_grp["Sem"].dt.start_time.dt.strftime("%d/%m")
+        _rw_grp["tipo"]    = "Real"
+        _rw_12 = _rw_grp.tail(12)
     else:
-        st.info("Treinos sem training_load estimado — verifique a importação.")
+        _rw_12 = pd.DataFrame(columns=["Sem_str","km","dplus","tipo"])
+
+    # Planned weekly volume
+    _pw = plan_future[["date","distance_km","_elev_m"]].copy() if not plan_future.empty else pd.DataFrame()
+    if not _pw.empty:
+        _pw["Sem"] = _pw["date"].dt.to_period("W")
+        _pw_grp = _pw.groupby("Sem").agg(
+            km=("distance_km","sum"), dplus=("_elev_m","sum")
+        ).reset_index()
+        _pw_grp["Sem_str"] = _pw_grp["Sem"].dt.start_time.dt.strftime("%d/%m")
+        _pw_grp["tipo"]    = "Plano"
+    else:
+        _pw_grp = pd.DataFrame(columns=["Sem_str","km","dplus","tipo"])
+
+    _vol_fig = go.Figure()
+    if not _rw_12.empty:
+        _vol_fig.add_bar(x=_rw_12["Sem_str"], y=_rw_12["km"],
+                         name="KM real", marker_color=BLUE, opacity=0.85)
+    if not _pw_grp.empty:
+        _vol_fig.add_bar(x=_pw_grp["Sem_str"], y=_pw_grp["km"],
+                         name="KM plano", marker_color=BLUE, opacity=0.4,
+                         marker_pattern_shape="/")
+    if not _rw_12.empty and _rw_12["dplus"].sum() > 0:
+        _vol_fig.add_scatter(x=_rw_12["Sem_str"], y=_rw_12["dplus"],
+                             name="D+ real (m)", yaxis="y2",
+                             line=dict(color=GREEN, width=2), mode="lines+markers")
+    if not _pw_grp.empty and _pw_grp["dplus"].sum() > 0:
+        _vol_fig.add_scatter(x=_pw_grp["Sem_str"], y=_pw_grp["dplus"],
+                             name="D+ plano (m)", yaxis="y2",
+                             line=dict(color=GREEN, width=2, dash="dash"), mode="lines+markers")
+    _vol_fig.update_layout(
+        height=300, barmode="group", margin=dict(t=10,b=10,l=0,r=60),
+        legend=dict(orientation="h", y=-0.25),
+        yaxis=dict(title="km", showgrid=True),
+        yaxis2=dict(title="D+ (m)", overlaying="y", side="right", showgrid=False),
+        xaxis=dict(showgrid=False),
+    )
+    st.plotly_chart(_vol_fig, use_container_width=True)
+
+    # ── Distribuição de intensidade ───────────────────────────────────────
+    if not _int_counts.empty:
+        st.markdown("#### 🎯 Distribuição de intensidade no plano")
+        _ic1, _ic2 = st.columns([2, 1])
+        _int_colors = {
+            "Muito Leve":"#27AE60","Leve":"#2ECC71","Trote":"#1ABC9C",
+            "Trote/Regenerativo":"#1ABC9C","Regenerativo":"#1ABC9C",
+            "Moderado":"#F1C40F","Moderado Firme":"#E67E22","Moderado-firme":"#E67E22",
+            "Forte":"#E74C3C","Muito Forte":"#922B21",
+        }
+        _bar_colors = [_int_colors.get(l,"#7F8C8D") for l in _int_counts.index]
+        _fig_int = go.Figure(go.Bar(
+            x=_int_counts.index, y=_int_counts.values,
+            marker_color=_bar_colors, text=_int_counts.values, textposition="auto"
+        ))
+        _fig_int.update_layout(height=220, margin=dict(t=10,b=10,l=0,r=0),
+                                xaxis=dict(showgrid=False), yaxis=dict(showgrid=False))
+        _ic1.plotly_chart(_fig_int, use_container_width=True)
+        with _ic2:
+            st.metric("😌 Leve/Regenerativo", f"{_pct_easy}%")
+            st.metric("💪 Forte/Muito Forte",  f"{_pct_hard}%")
+            _pc_mod = 100 - _pct_easy - _pct_hard
+            st.metric("🔄 Moderado",           f"{_pc_mod}%")
+            if _pct_easy >= 70:
+                st.success("✅ Boa base aeróbica (regra 80/20)")
+            elif _pct_hard > 30:
+                st.warning("⚠️ Plano muito intenso — risco de overtraining")
 
     st.markdown("---")
 
