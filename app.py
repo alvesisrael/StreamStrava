@@ -4172,19 +4172,11 @@ Se não conseguir extrair algum campo, use null."""
     plan_df["date"] = pd.to_datetime(plan_df["date"], errors="coerce")
     plan_df = plan_df.dropna(subset=["date"]).sort_values("date")
 
-    plan_future = plan_df[plan_df["date"] >= pd.Timestamp(_today_str)].copy()
-    plan_past   = plan_df[plan_df["date"] <  pd.Timestamp(_today_str)].copy()
-
-    # ═══════════════════════════════════════════════════════════════════════
-    #  ANALYTICS DO PLANO — KPIs de treinador
-    # ═══════════════════════════════════════════════════════════════════════
-
     # ── Calcula métricas do plano ─────────────────────────────────────────
     _total_plan_km  = float(plan_df["distance_km"].sum()) if "distance_km" in plan_df.columns else 0
-    _total_fut_km   = float(plan_future["distance_km"].sum()) if not plan_future.empty and "distance_km" in plan_future.columns else 0
     _has_elev       = "elevation_gain" in plan_df.columns
 
-    # D+ total (parse "900-1200m D+" → take first number)
+    # D+ total (parse "900-1200m D+" → take first number) — must happen BEFORE plan_future split
     def _parse_elev(s):
         import re as _re
         if not s or str(s) in ("None","nan",""): return 0.0
@@ -4194,6 +4186,15 @@ Se não conseguir extrair algum campo, use null."""
         plan_df["_elev_m"] = plan_df["elevation_gain"].apply(_parse_elev)
     else:
         plan_df["_elev_m"] = 0.0
+
+    plan_future = plan_df[plan_df["date"] >= pd.Timestamp(_today_str)].copy()
+    plan_past   = plan_df[plan_df["date"] <  pd.Timestamp(_today_str)].copy()
+
+    # ═══════════════════════════════════════════════════════════════════════
+    #  ANALYTICS DO PLANO — KPIs de treinador
+    # ═══════════════════════════════════════════════════════════════════════
+
+    _total_fut_km   = float(plan_future["distance_km"].sum()) if not plan_future.empty and "distance_km" in plan_future.columns else 0
 
     _total_dplus    = plan_df["_elev_m"].sum()
     _n_weeks_plan   = max(1, int(plan_df["date"].dt.to_period("W").nunique()))
@@ -4317,12 +4318,12 @@ Se não conseguir extrair algum campo, use null."""
                              name="CTL (real)", line=dict(color=BLUE, width=2.5))
         if not _pmc_proj.empty:
             _fig_pmc.add_scatter(x=_pmc_proj["Data"], y=_pmc_proj["CTL"],
-                                 name="CTL (plano)", line=dict(color=BLUE, width=2, dash="dash"))
+                                 name="CTL (plano)", line=dict(color=BLUE, width=2), opacity=0.55)
         _fig_pmc.add_scatter(x=_real_show["Data"], y=_real_show["TSB"],
                              name="TSB (real)", line=dict(color=GREEN, width=1.5))
         if not _pmc_proj.empty:
             _fig_pmc.add_scatter(x=_pmc_proj["Data"], y=_pmc_proj["TSB"],
-                                 name="TSB (plano)", line=dict(color=GREEN, width=1.5, dash="dash"))
+                                 name="TSB (plano)", line=dict(color=GREEN, width=1.5), opacity=0.55)
         # TSB zones
         _fig_pmc.add_hrect(y0=5, y1=20, fillcolor="rgba(46,204,113,0.07)", line_width=0,
                            annotation_text="Forma ideal", annotation_position="right")
@@ -4342,7 +4343,7 @@ Se não conseguir extrair algum campo, use null."""
             _fig_acwr.add_scatter(x=_real_show_acwr["Data"], y=_real_show_acwr["ACWR"],
                                   name="ACWR real", line=dict(color=BLUE, width=2))
             _fig_acwr.add_scatter(x=_pmc_proj["Data"], y=_pmc_proj["ACWR"],
-                                  name="ACWR plano", line=dict(color=AMBER, width=2, dash="dash"))
+                                  name="ACWR plano", line=dict(color=AMBER, width=2), opacity=0.6)
             _fig_acwr.add_hrect(y0=0.8, y1=1.3, fillcolor="rgba(46,204,113,0.10)", line_width=0,
                                 annotation_text="✅ Zona segura", annotation_position="right")
             _fig_acwr.add_hrect(y0=1.3, y1=1.5, fillcolor="rgba(243,156,18,0.10)", line_width=0,
@@ -4397,7 +4398,7 @@ Se não conseguir extrair algum campo, use null."""
     if not _pw_grp.empty and _pw_grp["dplus"].sum() > 0:
         _vol_fig.add_scatter(x=_pw_grp["Sem_str"], y=_pw_grp["dplus"],
                              name="D+ plano (m)", yaxis="y2",
-                             line=dict(color=GREEN, width=2, dash="dash"), mode="lines+markers")
+                             line=dict(color=GREEN, width=2), opacity=0.5, mode="lines+markers")
     _vol_fig.update_layout(
         height=300, barmode="group", margin=dict(t=10,b=10,l=0,r=60),
         legend=dict(orientation="h", y=-0.25),
