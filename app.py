@@ -3225,7 +3225,7 @@ with tab_hist:
                 if st.button("Perguntar sobre este treino ▶", key=f"groq_btn_ativ_{ativ_selecionada}"):
                     if _q_ativ.strip():
                         with st.spinner("Analisando seu treino..."):
-                            _ans_ativ = _groq_ask(_q_ativ, _ctx_ativ, GROQ_KEY)
+                            _ans_ativ = _groq_ask([{"role": "user", "content": _q_ativ.strip()}], _ctx_ativ, GROQ_KEY)
                         st.session_state[f"groq_ans_ativ_{ativ_selecionada}"] = _ans_ativ
                 if f"groq_ans_ativ_{ativ_selecionada}" in st.session_state:
                     st.markdown(st.session_state[f"groq_ans_ativ_{ativ_selecionada}"])
