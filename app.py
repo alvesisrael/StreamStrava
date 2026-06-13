@@ -4342,7 +4342,7 @@ Se não conseguir extrair algum campo, use null."""
             _fig_acwr.add_scatter(x=_real_show_acwr["Data"], y=_real_show_acwr["ACWR"],
                                   name="ACWR real", line=dict(color=BLUE, width=2))
             _fig_acwr.add_scatter(x=_pmc_proj["Data"], y=_pmc_proj["ACWR"],
-                                  name="ACWR plano", line=dict(color=ORANGE, width=2, dash="dash"))
+                                  name="ACWR plano", line=dict(color=AMBER, width=2, dash="dash"))
             _fig_acwr.add_hrect(y0=0.8, y1=1.3, fillcolor="rgba(46,204,113,0.10)", line_width=0,
                                 annotation_text="✅ Zona segura", annotation_position="right")
             _fig_acwr.add_hrect(y0=1.3, y1=1.5, fillcolor="rgba(243,156,18,0.10)", line_width=0,
@@ -4438,85 +4438,121 @@ Se não conseguir extrair algum campo, use null."""
     st.markdown("---")
 
     # ── CALENDÁRIO DE TREINOS FUTUROS ─────────────────────────────────────────
-    st.subheader("🗓️ Próximos treinos")
+    st.markdown("#### 🗓️ Próximos treinos")
 
     _INT_COLOR_PLAN = {
-        "Muito Leve": "#27AE60", "Leve": "#2ECC71",
+        "Muito Leve": "#27AE60", "Leve": "#2ECC71", "Trote": "#1ABC9C",
+        "Trote/Regenerativo": "#1ABC9C", "Regenerativo": "#1ABC9C",
         "Moderado": "#F1C40F", "Moderado Firme": "#E67E22", "Moderado-firme": "#E67E22",
-        "Forte": "#E74C3C", "Muito Forte": "#922B21", "Trote": "#1ABC9C",
+        "Forte": "#E74C3C", "Muito Forte": "#922B21",
+    }
+    _INT_ICON = {
+        "Muito Leve":"🟢","Leve":"🟢","Trote":"🟢","Trote/Regenerativo":"🟢","Regenerativo":"🟢",
+        "Moderado":"🟡","Moderado Firme":"🟠","Moderado-firme":"🟠",
+        "Forte":"🔴","Muito Forte":"🔴",
+    }
+    _TYPE_ICON = {
+        "Longo":"🏔️","Intervalado":"⚡","Regenerativo":"💤","Treino de Ritmo":"🎯",
+        "Corrida":"🏃","TrailRun":"🌲","Trail":"🌲","Fartlek":"🔀",
     }
 
-    # Group by week
     plan_future["week"] = plan_future["date"].dt.to_period("W")
-    for _wk, _wk_df in plan_future.groupby("week"):
-        _wk_start = _wk.start_time.strftime("%d/%m")
-        _wk_end   = _wk.end_time.strftime("%d/%m")
-        _wk_km    = _wk_df["distance_km"].sum() if "distance_km" in _wk_df.columns else 0
-        _wk_load  = _wk_df["training_load"].sum() if "training_load" in _wk_df.columns else 0
-        with st.expander(
-            f"📅 Semana {_wk_start}–{_wk_end} · {_wk_km:.0f} km · carga estimada {_wk_load:.0f}",
-            expanded=(_wk == plan_future["week"].iloc[0])
-        ):
+    _weeks_list = list(plan_future.groupby("week"))
+
+    for _wi, (_wk, _wk_df) in enumerate(_weeks_list):
+        _wk_start  = _wk.start_time.strftime("%d/%m")
+        _wk_end    = _wk.end_time.strftime("%d/%m")
+        _wk_km     = _wk_df["distance_km"].sum() if "distance_km" in _wk_df.columns else 0
+        _wk_load   = (_wk_df["training_load"].sum() if "training_load" in _wk_df.columns else 0) or 0
+        _wk_dplus  = _wk_df["_elev_m"].sum() if "_elev_m" in _wk_df.columns else 0
+        _wk_days   = _wk_df["date"].nunique()
+        # Check how many completed
+        _wk_done = 0
+        if not df_run.empty:
+            for _d in _wk_df["date"]:
+                if len(df_run[df_run["start_date"].dt.date == _d.date()]) > 0:
+                    _wk_done += 1
+        _wk_prog = f"{_wk_done}/{_wk_days} ✅" if _wk_done > 0 else f"{_wk_days} treinos"
+        _wk_title = (
+            f"**Semana {_wk_start}–{_wk_end}** · {_wk_km:.0f} km"
+            + (f" · 📐 {_wk_dplus:.0f} m D+" if _wk_dplus > 0 else "")
+            + f" · {_wk_prog}"
+        )
+        with st.expander(_wk_title, expanded=(_wi == 0)):
             for _, row in _wk_df.sort_values("date").iterrows():
                 _dt    = row["date"]
                 _dow   = ["Seg","Ter","Qua","Qui","Sex","Sáb","Dom"][_dt.weekday()]
-                _int   = row.get("intensity") or "Moderado"
-                _col   = _INT_COLOR_PLAN.get(str(_int), "#7F8C8D")
+                _int   = str(row.get("intensity") or "Moderado").strip()
+                _col   = _INT_COLOR_PLAN.get(_int, "#7F8C8D")
+                _iico  = _INT_ICON.get(_int, "⚪")
                 _km    = row.get("distance_km")
-                _type  = row.get("training_type") or row.get("type") or "Corrida"
-                _title = row.get("title") or ""
-                _desc  = row.get("description") or ""
-                _elev  = row.get("elevation_gain") or ""
+                _type  = str(row.get("training_type") or "Corrida").strip()
+                _tico  = _TYPE_ICON.get(_type, "🏃")
+                _title = str(row.get("title") or "").strip()
+                _desc  = str(row.get("description") or "").strip()
+                _elev  = str(row.get("elevation_gain") or "").strip()
+                _course= str(row.get("course") or "").strip()
                 _tl    = row.get("training_load")
+                _blocks= row.get("blocks") or []
 
-                # Check if completed (matched against real activities)
-                _completed = False
-                if not df_run.empty:
-                    _same_day = df_run[df_run["start_date"].dt.date == _dt.date()]
-                    _completed = len(_same_day) > 0
+                # Completed check
+                _done = not df_run.empty and len(df_run[df_run["start_date"].dt.date == _dt.date()]) > 0
 
-                _done_icon = "✅" if _completed else "⏳"
-                _header_line = (
-                    f"{_done_icon} **{_dow} {_dt.strftime('%d/%m')}** "
-                    f"— <span style='color:{_col};font-weight:bold'>{_int}</span> "
-                    f"· {_type}"
-                    + (f" · **{_km:.0f} km**" if _km else "")
-                    + (f" · 📐 {_elev}" if _elev else "")
-                    + (f" · carga ~{_tl:.0f}" if _tl else "")
+                # ── Header card ──────────────────────────────────────────
+                st.markdown(
+                    f"{'✅' if _done else '⏳'} **{_dow} {_dt.strftime('%d/%m/%Y')}**",
+                    unsafe_allow_html=True
                 )
-                st.markdown(_header_line, unsafe_allow_html=True)
-                if _title:
-                    st.markdown(f"&nbsp;&nbsp;&nbsp;**{_title}**")
-                if _desc:
-                    # Show full description preserving newlines
-                    for _line in str(_desc).split("\n"):
-                        _line = _line.strip()
-                        if _line:
-                            st.caption(f"   {_line}")
+                # Metadata row
+                _meta = []
+                _meta.append(f"<span style='color:{_col};font-weight:600'>{_iico} {_int}</span>")
+                _meta.append(f"{_tico} **{_type}**")
+                if _km: _meta.append(f"📏 **{_km:.0f} km**")
+                if _elev: _meta.append(f"📐 **{_elev}**")
+                if _course and _course not in ("None","nan",""): _meta.append(f"🗺️ {_course}")
+                if _tl: _meta.append(f"⚡ carga ~{float(_tl):.0f}")
+                st.markdown(" &nbsp;|&nbsp; ".join(_meta), unsafe_allow_html=True)
 
-                # Blocks detail (se disponível)
-                _blocks = row.get("blocks")
-                if _blocks and isinstance(_blocks, list) and len(_blocks) > 0:
-                    _block_lines = []
-                    for b in _blocks:
-                        if not isinstance(b, dict):
-                            continue
-                        _bi = str(b.get("intensity",""))
-                        _bc = _INT_COLOR_PLAN.get(_bi, "#aaa")
-                        if b.get("reps"):
-                            _block_lines.append(
-                                f"<span style='color:{_bc}'>● {b['reps']}×{b.get('distance_km','')}km {_bi}"
-                                + (f" (rec {b['rest']})" if b.get("rest") else "") + "</span>"
-                            )
-                        elif b.get("distance_km"):
-                            _note = b.get("note","")
-                            _block_lines.append(
-                                f"<span style='color:{_bc}'>● {b['distance_km']}km {_bi}"
-                                + (f" — {_note}" if _note else "") + "</span>"
-                            )
-                    if _block_lines:
-                        st.markdown("&nbsp;&nbsp;&nbsp;" + " &nbsp; ".join(_block_lines), unsafe_allow_html=True)
-                st.divider()
+                # Title (bold, coach name for the session)
+                if _title and _title not in ("None","nan",""):
+                    st.markdown(f"&nbsp;&nbsp;📌 **{_title}**")
+
+                # Description — full text, paragraph by paragraph
+                if _desc and _desc not in ("None","nan",""):
+                    _paras = [p.strip() for p in _desc.replace("\r\n","\n").replace("\r","\n").split("\n") if p.strip()]
+                    with st.container():
+                        for _p in _paras:
+                            st.caption(_p)
+
+                # Blocks (structured intervals)
+                if isinstance(_blocks, list) and len(_blocks) > 0:
+                    _valid_blocks = [b for b in _blocks if isinstance(b, dict)]
+                    if _valid_blocks:
+                        st.markdown("&nbsp;&nbsp;**Estrutura do treino:**")
+                        for _b in _valid_blocks:
+                            _bi   = str(_b.get("intensity","")).strip()
+                            _bc   = _INT_COLOR_PLAN.get(_bi, "#aaa")
+                            _bico = _INT_ICON.get(_bi, "⚪")
+                            _note = str(_b.get("note","")).strip()
+                            _rest = str(_b.get("rest","")).strip()
+                            if _b.get("reps"):
+                                _bdist = _b.get('distance_km','')
+                                # Convert to meters if < 1 km
+                                _bdist_str = f"{float(_bdist)*1000:.0f}m" if _bdist and float(_bdist) < 1 else (f"{float(_bdist):.1f}km" if _bdist else "")
+                                _bline = f"<span style='color:{_bc}'>{'&nbsp;'*4}{_bico} **{_b['reps']}×{_bdist_str}** {_bi}"
+                                if _rest: _bline += f" <span style='color:#aaa'>rec {_rest}</span>"
+                                _bline += "</span>"
+                            elif _b.get("distance_km"):
+                                _bdist = float(_b['distance_km'])
+                                _bdist_str = f"{_bdist*1000:.0f}m" if _bdist < 1 else f"{_bdist:.1f}km"
+                                _bline = f"<span style='color:{_bc}'>{'&nbsp;'*4}{_bico} **{_bdist_str}** {_bi}"
+                                if _note and _note not in ("None","nan",""): _bline += f" <span style='color:#aaa'>— {_note}</span>"
+                                _bline += "</span>"
+                            else:
+                                continue
+                            st.markdown(_bline, unsafe_allow_html=True)
+
+                st.markdown("<hr style='margin:8px 0;border-color:#333'>", unsafe_allow_html=True)
 
     # ── MANAGE PLAN ───────────────────────────────────────────────────────────
     with st.expander("🗑️ Gerenciar plano (remover treinos)"):
