@@ -4373,16 +4373,25 @@ Se não conseguir extrair algum campo, use null."""
     else:
         _rw_12 = pd.DataFrame(columns=["label","km","dplus","n_treinos"])
 
-    # Planned weekly volume (future only)
-    _pw = plan_future[["date","distance_km","_elev_m"]].copy() if not plan_future.empty else pd.DataFrame()
-    if not _pw.empty:
-        _pw["_Sem"] = _pw["date"].dt.to_period("W")
-        _pw_grp = _pw.groupby("_Sem").agg(
-            km=("distance_km","sum"), dplus=("_elev_m","sum")
-        ).reset_index()
-        _pw_grp["label"] = (_pw_grp["_Sem"].dt.start_time.dt.strftime("%d/%m")
-                            + " – " + _pw_grp["_Sem"].dt.end_time.dt.strftime("%d/%m"))
-        _pw_grp["n_treinos"] = _pw.groupby("_Sem").size().reindex(_pw_grp["_Sem"]).fillna(0).astype(int).values
+    # Planned weekly volume — only weeks with NO real data yet
+    # (avoids double bars for weeks that already have real activities)
+    _last_real_sem = _rw_12["_Sem"].max() if not _rw_12.empty and "_Sem" in _rw_12.columns else None
+    _pw_raw = plan_future[["date","distance_km","_elev_m"]].copy() if not plan_future.empty else pd.DataFrame()
+    if not _pw_raw.empty:
+        _pw_raw["_Sem"] = _pw_raw["date"].dt.to_period("W")
+        # Exclude weeks that already have real activity data
+        if _last_real_sem is not None:
+            _pw_raw = _pw_raw[_pw_raw["_Sem"] > _last_real_sem]
+        _pw = _pw_raw
+        if not _pw.empty:
+            _pw_grp = _pw.groupby("_Sem").agg(
+                km=("distance_km","sum"), dplus=("_elev_m","sum")
+            ).reset_index()
+            _pw_grp["label"] = (_pw_grp["_Sem"].dt.start_time.dt.strftime("%d/%m")
+                                + " – " + _pw_grp["_Sem"].dt.end_time.dt.strftime("%d/%m"))
+            _pw_grp["n_treinos"] = _pw.groupby("_Sem").size().reindex(_pw_grp["_Sem"]).fillna(0).astype(int).values
+        else:
+            _pw_grp = pd.DataFrame(columns=["label","km","dplus","n_treinos"])
     else:
         _pw_grp = pd.DataFrame(columns=["label","km","dplus","n_treinos"])
 
