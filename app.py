@@ -4173,10 +4173,13 @@ Se não conseguir extrair algum campo, use null."""
     # ── PMC PROJETADO ─────────────────────────────────────────────────────────
     st.subheader("📈 PMC Projetado até a prova")
 
-    _pmc_real = calc_pmc(_runs_raw)   # _runs_raw = all Run/TrailRun activities
+    _pmc_real = calc_pmc(_runs_raw)   # returns DataFrame with "Data","CTL","ATL","TSB" columns
     if not _pmc_real.empty and "training_load" in plan_df.columns:
-        # Build daily load series: real history + planned future
-        _real_end = _pmc_real.index.max()
+        # calc_pmc returns integer-indexed DF with "Data" column (Timestamp)
+        _pmc_real = _pmc_real.copy()
+        _pmc_real["Data"] = pd.to_datetime(_pmc_real["Data"])
+
+        _real_end   = _pmc_real["Data"].max()
         _proj_start = max(_real_end + pd.Timedelta(days=1), pd.Timestamp(_today_str))
 
         # Future planned loads
@@ -4189,45 +4192,46 @@ Se não conseguir extrair algum campo, use null."""
             )
             _fut_loads[d.normalize()] = _fut_loads.get(d.normalize(), 0) + float(tl or 0)
 
-        # Extend PMC from last real value
+        # Extend PMC from last real values
         _last = _pmc_real.iloc[-1]
         _ctl, _atl = float(_last["CTL"]), float(_last["ATL"])
         k_ctl, k_atl = 2/(42+1), 2/(7+1)
 
         _proj_rows = []
-        _cur_day = _proj_start.normalize()
+        _cur_day = pd.Timestamp(_proj_start).normalize()
         _end_day  = RACE_DATE + pd.Timedelta(days=1)
         while _cur_day <= _end_day:
             _tl = _fut_loads.get(_cur_day, 0.0)
             _ctl = _ctl + k_ctl * (_tl - _ctl)
             _atl = _atl + k_atl * (_tl - _atl)
-            _proj_rows.append({"date": _cur_day, "CTL": _ctl, "ATL": _atl,
+            _proj_rows.append({"Data": _cur_day, "CTL": _ctl, "ATL": _atl,
                                 "TSB": _ctl - _atl, "load": _tl, "projected": True})
             _cur_day += pd.Timedelta(days=1)
 
-        _pmc_proj = pd.DataFrame(_proj_rows).set_index("date")
+        _pmc_proj = pd.DataFrame(_proj_rows)
 
-        # Combine real + projected for chart
-        _pmc_plot = _pmc_real.copy()
-        _pmc_plot["projected"] = False
-        _comb = pd.concat([_pmc_plot, _pmc_proj])
-        _comb = _comb[_comb.index >= pd.Timestamp(_today_str) - pd.Timedelta(days=30)]
+        # Combine real + projected for chart (use "Data" column throughout)
+        _pmc_real["projected"] = False
+        _comb = pd.concat([_pmc_real, _pmc_proj], ignore_index=True)
+        _comb["Data"] = pd.to_datetime(_comb["Data"])
+        _cutoff = pd.Timestamp(_today_str) - pd.Timedelta(days=30)
+        _comb = _comb[_comb["Data"] >= _cutoff]
 
-        _real_part = _comb[~_comb["projected"]]
-        _proj_part = _comb[_comb["projected"]]
+        _real_part = _comb[_comb["projected"] == False]
+        _proj_part = _comb[_comb["projected"] == True]
 
         fig_pmc = go.Figure()
         # Real CTL
-        fig_pmc.add_scatter(x=_real_part.index, y=_real_part["CTL"],
+        fig_pmc.add_scatter(x=_real_part["Data"], y=_real_part["CTL"],
                             name="CTL (real)", line=dict(color=BLUE, width=2.5))
         # Projected CTL (dashed)
-        fig_pmc.add_scatter(x=_proj_part.index, y=_proj_part["CTL"],
+        fig_pmc.add_scatter(x=_proj_part["Data"], y=_proj_part["CTL"],
                             name="CTL (projetado)", line=dict(color=BLUE, width=2, dash="dash"))
         # Real TSB
-        fig_pmc.add_scatter(x=_real_part.index, y=_real_part["TSB"],
+        fig_pmc.add_scatter(x=_real_part["Data"], y=_real_part["TSB"],
                             name="TSB (real)", line=dict(color=GREEN, width=1.5))
         # Projected TSB (dashed)
-        fig_pmc.add_scatter(x=_proj_part.index, y=_proj_part["TSB"],
+        fig_pmc.add_scatter(x=_proj_part["Data"], y=_proj_part["TSB"],
                             name="TSB (projetado)", line=dict(color=GREEN, width=1.5, dash="dash"))
         # Race day marker
         fig_pmc.add_vline(x=RACE_DATE, line_dash="dot", line_color=RED,
@@ -4245,7 +4249,7 @@ Se não conseguir extrair algum campo, use null."""
         )
         # Show projected CTL and TSB on race day
         if not _proj_part.empty:
-            _race_row = _proj_part[_proj_part.index.normalize() == RACE_DATE.normalize()]
+            _race_row = _proj_part[pd.to_datetime(_proj_part["Data"]).dt.normalize() == RACE_DATE.normalize()]
             if not _race_row.empty:
                 _ctl_race = _race_row["CTL"].iloc[0]
                 _tsb_race = _race_row["TSB"].iloc[0]
