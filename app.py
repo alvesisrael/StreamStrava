@@ -4173,7 +4173,7 @@ Se não conseguir extrair algum campo, use null."""
     # ── PMC PROJETADO ─────────────────────────────────────────────────────────
     st.subheader("📈 PMC Projetado até a prova")
 
-    _pmc_real = calc_pmc(df_run_all)
+    _pmc_real = calc_pmc(_runs_raw)   # _runs_raw = all Run/TrailRun activities
     if not _pmc_real.empty and "training_load" in plan_df.columns:
         # Build daily load series: real history + planned future
         _real_end = _pmc_real.index.max()
