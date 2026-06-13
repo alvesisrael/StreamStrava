@@ -4000,10 +4000,10 @@ with tab_sugerir:
 #  7 · PLANO DE TREINO  — importação via screenshot + calendário + PMC projetado
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_plano:
-    import base64, json as _json
+    import os as _os, base64, json as _json
     from datetime import date as _date, timedelta as _td
 
-    PLAN_FILE   = os.path.join(BASE, "training_plan.json")
+    PLAN_FILE   = _os.path.join(BASE, "training_plan.json")
     RACE_DATE   = pd.Timestamp("2026-08-01")
     DAYS_LEFT   = (RACE_DATE - pd.Timestamp.now()).days
 
@@ -4028,7 +4028,7 @@ with tab_plano:
 
     # ── Load / save plan ──────────────────────────────────────────────────────
     def _load_plan() -> list:
-        if os.path.exists(PLAN_FILE):
+        if _os.path.exists(PLAN_FILE):
             try:
                 with open(PLAN_FILE) as _f:
                     return _json.load(_f)
@@ -4037,7 +4037,7 @@ with tab_plano:
         return []
 
     def _save_plan(plan: list):
-        os.makedirs(os.path.dirname(PLAN_FILE), exist_ok=True)
+        _os.makedirs(_os.path.dirname(PLAN_FILE), exist_ok=True)
         with open(PLAN_FILE, "w") as _f:
             _json.dump(plan, _f, ensure_ascii=False, indent=2)
 
