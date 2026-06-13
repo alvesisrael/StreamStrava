@@ -4360,53 +4360,107 @@ Se não conseguir extrair algum campo, use null."""
 
     # Real weekly volume (last 12 weeks)
     if not df_run.empty:
-        _rw = (df_run[["start_date","distance_km","elevation_gain"]].copy())
-        _rw["Sem"] = _rw["start_date"].dt.to_period("W")
-        _rw_grp = _rw.groupby("Sem").agg(
+        _rw = df_run[["start_date","distance_km","elevation_gain"]].copy()
+        _rw["_Sem"] = _rw["start_date"].dt.to_period("W")
+        _rw_grp = _rw.groupby("_Sem").agg(
             km=("distance_km","sum"), dplus=("elevation_gain","sum")
         ).reset_index()
-        _rw_grp["Sem_str"] = _rw_grp["Sem"].dt.start_time.dt.strftime("%d/%m")
-        _rw_grp["tipo"]    = "Real"
-        _rw_12 = _rw_grp.tail(12)
+        # Label: "08/06 – 14/06"
+        _rw_grp["label"] = (_rw_grp["_Sem"].dt.start_time.dt.strftime("%d/%m")
+                            + " – " + _rw_grp["_Sem"].dt.end_time.dt.strftime("%d/%m"))
+        _rw_grp["n_treinos"] = _rw.groupby("_Sem").size().reindex(_rw_grp["_Sem"]).fillna(0).astype(int).values
+        _rw_12 = _rw_grp.tail(12).copy()
     else:
-        _rw_12 = pd.DataFrame(columns=["Sem_str","km","dplus","tipo"])
+        _rw_12 = pd.DataFrame(columns=["label","km","dplus","n_treinos"])
 
-    # Planned weekly volume
+    # Planned weekly volume (future only)
     _pw = plan_future[["date","distance_km","_elev_m"]].copy() if not plan_future.empty else pd.DataFrame()
     if not _pw.empty:
-        _pw["Sem"] = _pw["date"].dt.to_period("W")
-        _pw_grp = _pw.groupby("Sem").agg(
+        _pw["_Sem"] = _pw["date"].dt.to_period("W")
+        _pw_grp = _pw.groupby("_Sem").agg(
             km=("distance_km","sum"), dplus=("_elev_m","sum")
         ).reset_index()
-        _pw_grp["Sem_str"] = _pw_grp["Sem"].dt.start_time.dt.strftime("%d/%m")
-        _pw_grp["tipo"]    = "Plano"
+        _pw_grp["label"] = (_pw_grp["_Sem"].dt.start_time.dt.strftime("%d/%m")
+                            + " – " + _pw_grp["_Sem"].dt.end_time.dt.strftime("%d/%m"))
+        _pw_grp["n_treinos"] = _pw.groupby("_Sem").size().reindex(_pw_grp["_Sem"]).fillna(0).astype(int).values
     else:
-        _pw_grp = pd.DataFrame(columns=["Sem_str","km","dplus","tipo"])
+        _pw_grp = pd.DataFrame(columns=["label","km","dplus","n_treinos"])
+
+    # Build unified x-axis: all labels in chronological order (no duplicates)
+    _all_labels = list(dict.fromkeys(
+        list(_rw_12["label"] if not _rw_12.empty else []) +
+        list(_pw_grp["label"] if not _pw_grp.empty else [])
+    ))
 
     _vol_fig = go.Figure()
     if not _rw_12.empty:
-        _vol_fig.add_bar(x=_rw_12["Sem_str"], y=_rw_12["km"],
-                         name="KM real", marker_color=BLUE, opacity=0.85)
+        _vol_fig.add_bar(
+            x=_rw_12["label"], y=_rw_12["km"].round(1),
+            name="🔵 KM rodado",
+            marker_color=BLUE, opacity=0.9,
+            customdata=_rw_12[["km","dplus","n_treinos"]].values,
+            hovertemplate=(
+                "<b>%{x}</b><br>"
+                "🏃 %{customdata[0]:.1f} km rodados<br>"
+                "📐 %{customdata[1]:.0f} m D+<br>"
+                "📋 %{customdata[2]} treino(s)<extra></extra>"
+            )
+        )
     if not _pw_grp.empty:
-        _vol_fig.add_bar(x=_pw_grp["Sem_str"], y=_pw_grp["km"],
-                         name="KM plano", marker_color=BLUE, opacity=0.4,
-                         marker_pattern_shape="/")
+        _vol_fig.add_bar(
+            x=_pw_grp["label"], y=_pw_grp["km"].round(1),
+            name="⬜ KM planejado",
+            marker_color=AMBER, opacity=0.55,
+            customdata=_pw_grp[["km","dplus","n_treinos"]].values,
+            hovertemplate=(
+                "<b>%{x}</b><br>"
+                "📅 %{customdata[0]:.1f} km planejados<br>"
+                "📐 %{customdata[1]:.0f} m D+ planejado<br>"
+                "📋 %{customdata[2]} treino(s) no plano<extra></extra>"
+            )
+        )
+    # D+ lines
     if not _rw_12.empty and _rw_12["dplus"].sum() > 0:
-        _vol_fig.add_scatter(x=_rw_12["Sem_str"], y=_rw_12["dplus"],
-                             name="D+ real (m)", yaxis="y2",
-                             line=dict(color=GREEN, width=2), mode="lines+markers")
+        _vol_fig.add_scatter(
+            x=_rw_12["label"], y=_rw_12["dplus"].round(0),
+            name="📈 D+ real (m)", yaxis="y2",
+            line=dict(color=GREEN, width=2),
+            mode="lines+markers", marker=dict(size=5),
+            hovertemplate="<b>%{x}</b><br>📐 %{y:.0f} m D+ real<extra></extra>"
+        )
     if not _pw_grp.empty and _pw_grp["dplus"].sum() > 0:
-        _vol_fig.add_scatter(x=_pw_grp["Sem_str"], y=_pw_grp["dplus"],
-                             name="D+ plano (m)", yaxis="y2",
-                             line=dict(color=GREEN, width=2), opacity=0.5, mode="lines+markers")
+        _vol_fig.add_scatter(
+            x=_pw_grp["label"], y=_pw_grp["dplus"].round(0),
+            name="📈 D+ plano (m)", yaxis="y2",
+            line=dict(color=GREEN, width=2), opacity=0.45,
+            mode="lines+markers", marker=dict(size=5),
+            hovertemplate="<b>%{x}</b><br>📐 %{y:.0f} m D+ planejado<extra></extra>"
+        )
+
+    # Add avg line for real km
+    if not _rw_12.empty and len(_rw_12) >= 3:
+        _avg_km = _rw_12["km"].mean()
+        _vol_fig.add_hline(y=_avg_km, line_dash="dot", line_color=GRAY,
+                           annotation_text=f"média {_avg_km:.0f} km/sem",
+                           annotation_position="left")
+
     _vol_fig.update_layout(
-        height=300, barmode="group", margin=dict(t=10,b=10,l=0,r=60),
-        legend=dict(orientation="h", y=-0.25),
-        yaxis=dict(title="km", showgrid=True),
+        height=320, barmode="group", margin=dict(t=20, b=10, l=0, r=70),
+        legend=dict(orientation="h", y=-0.28, font=dict(size=12)),
+        yaxis=dict(title="km", showgrid=True, gridcolor="#333"),
         yaxis2=dict(title="D+ (m)", overlaying="y", side="right", showgrid=False),
-        xaxis=dict(showgrid=False),
+        xaxis=dict(showgrid=False, tickangle=-35, categoryorder="array", categoryarray=_all_labels),
+        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+        hoverlabel=dict(bgcolor="#1e1e1e", font_color="white", font_size=13),
     )
     st.plotly_chart(_vol_fig, use_container_width=True)
+
+    # Legend explanation
+    st.caption(
+        "🔵 Barras azuis = km efetivamente rodados por semana · "
+        "🟡 Barras amarelas = km planejados (treinos futuros) · "
+        "Linha verde = D+ acumulado · Linha pontilhada = meta média semanal"
+    )
 
     # ── Distribuição de intensidade ───────────────────────────────────────
     if not _int_counts.empty:
