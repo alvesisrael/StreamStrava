@@ -607,14 +607,22 @@ BASE = "data/processed"
 
 @st.cache_data(ttl=300)
 def load_all(base):
-    """Load activities and laps — prefers SQLite, falls back to CSV."""
+    """Load activities and laps — SQLite when available, CSV fallback."""
     import os
 
-    def _post_process_act(act: pd.DataFrame) -> pd.DataFrame:
+    # ── Normaliza tipos de ID: SQLite retorna TEXT, CSV retorna int64
+    #    Forçamos int64 em ambos para garantir joins corretos downstream
+    def _fix_id_types(df: pd.DataFrame, id_cols: list) -> pd.DataFrame:
+        for col in id_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce").astype("Int64")
+        return df
+
+    def _post_act(act: pd.DataFrame) -> pd.DataFrame:
         if act.empty:
             return act
-        # Strip BOM from column names (CSV artefact)
         act.columns = [c.lstrip("﻿") for c in act.columns]
+        act = _fix_id_types(act, ["id"])
         act["start_date"] = normalize_dt(act["start_date"])
         act["MesAno"]     = mesano_pt(act["start_date"])
         act["MesAnoOrd"]  = act["start_date"].dt.year * 12 + act["start_date"].dt.month
@@ -634,33 +642,31 @@ def load_all(base):
                 act["Intensidade"] = act["Intensidade"].replace("Nan", None)
         return act
 
-    def _post_process_laps(laps: pd.DataFrame) -> pd.DataFrame:
+    def _post_laps(laps: pd.DataFrame) -> pd.DataFrame:
         if laps.empty:
             return laps
         laps.columns = [c.lstrip("﻿") for c in laps.columns]
+        laps = _fix_id_types(laps, ["activity_id", "lap_id"])
         laps["start_date"] = normalize_dt(laps["start_date"])
         laps["MesAno"]     = mesano_pt(laps["start_date"])
         laps["MesAnoOrd"]  = laps["start_date"].dt.year * 12 + laps["start_date"].dt.month
         return laps
 
-    # ── Prefer SQLite if DB exists ────────────────────────────────────────────
+    # ── Fonte de dados: SQLite se disponível, senão CSV ───────────────────────
     if _HAS_DB and _DB_PATH.exists():
         try:
-            act  = _db_get_activities()
-            laps = _db_get_laps()
-            act  = _post_process_act(act)
-            laps = _post_process_laps(laps)
+            act  = _post_act(_db_get_activities())
+            laps = _post_laps(_db_get_laps())
         except Exception:
             act  = pd.DataFrame()
             laps = pd.DataFrame()
     else:
-        # ── Fallback: read from CSV ───────────────────────────────────────────
-        def read(name):
+        def _read(name):
             p = f"{base}/{name}"
             return pd.read_csv(p, sep=";", encoding="utf-8-sig") \
                    if os.path.exists(p) else pd.DataFrame()
-        act  = _post_process_act(read("activities_consolidated.csv"))
-        laps = _post_process_laps(read("activity_laps_consolidated.csv"))
+        act  = _post_act(_read("activities_consolidated.csv"))
+        laps = _post_laps(_read("activity_laps_consolidated.csv"))
 
     be = pd.DataFrame()  # best_efforts removido — não usado com Garmin
 
@@ -669,9 +675,10 @@ def load_all(base):
         act_names      = act.set_index("id")["name"] if "name" in act.columns else None
         intensidade_fc = calc_intensidade_fc(laps, act_names=act_names)
         if not intensidade_fc.empty:
-            fc_df          = intensidade_fc.reset_index()
-            fc_df.columns  = ["id", "Intensidade_FC"]
-            act            = act.merge(fc_df, on="id", how="left")
+            fc_df         = intensidade_fc.reset_index()
+            fc_df.columns = ["id", "Intensidade_FC"]
+            fc_df         = _fix_id_types(fc_df, ["id"])
+            act           = act.merge(fc_df, on="id", how="left")
 
     return act, laps, be
 
@@ -4710,11 +4717,11 @@ Se não conseguir extrair algum campo, use null."""
 
                 st.markdown("<hr style='margin:8px 0;border-color:#333'>", unsafe_allow_html=True)
 
-    # ── MANAGE PLAN ───────────────────────────────────────────────────────────
+    # ── MANAGE PLAN ────────────────────────────────────────────────────────────────────────
     with st.expander("🗑️ Gerenciar plano (remover treinos)"):
         if plan_data:
             _del_opts = {
-                f"{s.get('date','')} — {s.get('training_type','?')} {s.get('distance_km','?')}km": i
+                f"{s.get('date','')} — {s.get('training_type','?')}: {s.get('distance_km','?')}km": i
                 for i, s in enumerate(plan_data)
             }
             _to_del = st.multiselect("Selecione para remover:", list(_del_opts.keys()),
@@ -4726,3 +4733,15 @@ Se não conseguir extrair algum campo, use null."""
                 _save_plan(plan_data)
                 st.success("Removido(s).")
                 st.rerun()
+        else:
+            st.caption("Plano vazio.")
+
+    st.markdown("---")
+    # ── Groq assistant ────────────────────────────────────────────────────────────────────────
+    if GROQ_KEY and len(GROQ_KEY) >= 20:
+        _ctx_plano = f"""Plano de treino para Paulo Lopes Trail 21K (01/08/2026).
+Dias restantes: {DAYS_LEFT}.
+Treinos planejados: {len(plan_data)}.
+Proximos treinos: {[f"{s.get('date')} {s.get('training_type')} {s.get('distance_km')}km" for s in plan_future.head(5).to_dict('records')] if not plan_future.empty else []}.
+"""
+        _groq_widget("Plano", _ctx_plano, "plano")
