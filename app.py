@@ -67,6 +67,23 @@ ZONA_ORDER = ["Sem FC","Z1 - Regenerativo","Z2 - Aeróbico",
 GREEN, BLUE, AMBER, RED, PURPLE, GRAY = \
     "#2ECC71","#3498DB","#F39C12","#E74C3C","#9B59B6","#95A5A6"
 
+# ── DB layer (optional — graceful fallback to CSV/JSON if not available) ─────
+try:
+    from src.db.queries import (
+        get_activities   as _db_get_activities,
+        get_laps         as _db_get_laps,
+        get_garmin_insights as _db_get_insights,
+        get_training_plan   as _db_get_plan,
+        save_training_plan  as _db_save_plan,
+        delete_plan_entry   as _db_delete_plan,
+        save_message        as _db_save_msg,
+        get_conversation_history as _db_get_conv,
+    )
+    from src.db.schema import DB_PATH as _DB_PATH
+    _HAS_DB = True
+except Exception:
+    _HAS_DB = False
+
 # ── Groq LLM assistant ────────────────────────────────────────────────────────
 def _groq_build_system(context: str) -> str:
     """Monta o system prompt com perfil do atleta + dados do app."""
@@ -185,12 +202,27 @@ def _df_to_ctx_rows(df, cols, labels, max_rows=60):
     return "\n".join(rows) + "\n"
 
 def _groq_widget(tab_name: str, context: str, key_suffix: str):
-    _hist_key = "groq_hist_" + key_suffix
-    _ctx_key  = "groq_ctx_"  + key_suffix
+    _hist_key    = "groq_hist_" + key_suffix
+    _ctx_key     = "groq_ctx_"  + key_suffix
+    _sess_id_key = "groq_sid_"  + key_suffix
 
-    # Inicializa histórico e atualiza contexto quando o app recarrega dados
+    # ── Inicializa session_id persistente por tab ─────────────────────────────
+    if _sess_id_key not in st.session_state:
+        import uuid as _uuid
+        st.session_state[_sess_id_key] = str(_uuid.uuid4())
+    _session_id = st.session_state[_sess_id_key]
+
+    # ── Carrega histórico do DB na primeira execução ───────────────────────────
     if _hist_key not in st.session_state:
-        st.session_state[_hist_key] = []
+        if _HAS_DB and _DB_PATH.exists():
+            try:
+                _loaded = _db_get_conv(_session_id, limit=30)
+                st.session_state[_hist_key] = _loaded
+            except Exception:
+                st.session_state[_hist_key] = []
+        else:
+            st.session_state[_hist_key] = []
+
     # Contexto dos dados pode mudar (novo período, novo sync) — sempre atualiza
     st.session_state[_ctx_key] = context
 
@@ -205,9 +237,12 @@ def _groq_widget(tab_name: str, context: str, key_suffix: str):
                 else:
                     with st.chat_message("assistant", avatar="🏃"):
                         st.markdown(_msg["content"])
-            # Botão limpar conversa
+            # Botão limpar conversa (apenas sessão — mantém histórico no DB)
             if st.button("🗑️ Limpar conversa", key="groq_clear_" + key_suffix):
                 st.session_state[_hist_key] = []
+                # Nova session_id para não carregar histórico antigo
+                import uuid as _uuid
+                st.session_state[_sess_id_key] = str(_uuid.uuid4())
                 st.rerun()
         else:
             st.caption("Nenhuma pergunta ainda. Comece a conversa abaixo!")
@@ -226,8 +261,9 @@ def _groq_widget(tab_name: str, context: str, key_suffix: str):
             _send = st.button("Enviar ▶", key="groq_btn_" + key_suffix, use_container_width=True)
 
         if _send and _q.strip():
-            # Adiciona pergunta ao histórico
-            st.session_state[_hist_key].append({"role": "user", "content": _q.strip()})
+            _user_msg = _q.strip()
+            # Adiciona pergunta ao histórico (sessão)
+            st.session_state[_hist_key].append({"role": "user", "content": _user_msg})
             # Chama Groq com todo o histórico
             with st.spinner("Pensando..."):
                 _ans = _groq_ask(
@@ -235,8 +271,25 @@ def _groq_widget(tab_name: str, context: str, key_suffix: str):
                     st.session_state[_ctx_key],
                     GROQ_KEY
                 )
-            # Adiciona resposta ao histórico
+            # Adiciona resposta ao histórico (sessão)
             st.session_state[_hist_key].append({"role": "assistant", "content": _ans})
+            # Persiste no DB (user + assistant juntos)
+            if _HAS_DB:
+                try:
+                    import sqlite3 as _sl3, json as _jj
+                    _db_conn = _sl3.connect(str(_DB_PATH), check_same_thread=False)
+                    with _db_conn:
+                        _db_conn.execute(
+                            "INSERT INTO conversations (session_id,role,content,tab_context) VALUES(?,?,?,?)",
+                            (_session_id, "user", _user_msg, tab_name)
+                        )
+                        _db_conn.execute(
+                            "INSERT INTO conversations (session_id,role,content,tab_context) VALUES(?,?,?,?)",
+                            (_session_id, "assistant", _ans, tab_name)
+                        )
+                    _db_conn.close()
+                except Exception as _dbe:
+                    st.caption(f"⚠️ DB: {_dbe}")
             st.rerun()
 
 DIAS_PT  = {"Monday":"Seg","Tuesday":"Ter","Wednesday":"Qua",
@@ -554,14 +607,14 @@ BASE = "data/processed"
 
 @st.cache_data(ttl=300)
 def load_all(base):
+    """Load activities and laps — prefers SQLite, falls back to CSV."""
     import os
-    def read(name):
-        p = f"{base}/{name}"
-        return pd.read_csv(p, sep=";", encoding="utf-8-sig") \
-               if os.path.exists(p) else pd.DataFrame()
 
-    act = read("activities_consolidated.csv")
-    if not act.empty:
+    def _post_process_act(act: pd.DataFrame) -> pd.DataFrame:
+        if act.empty:
+            return act
+        # Strip BOM from column names (CSV artefact)
+        act.columns = [c.lstrip("﻿") for c in act.columns]
         act["start_date"] = normalize_dt(act["start_date"])
         act["MesAno"]     = mesano_pt(act["start_date"])
         act["MesAnoOrd"]  = act["start_date"].dt.year * 12 + act["start_date"].dt.month
@@ -579,12 +632,35 @@ def load_all(base):
             else:
                 act["Intensidade"] = act["Intensidade"].astype(str).str.strip().str.title()
                 act["Intensidade"] = act["Intensidade"].replace("Nan", None)
+        return act
 
-    laps = read("activity_laps_consolidated.csv")
-    if not laps.empty:
+    def _post_process_laps(laps: pd.DataFrame) -> pd.DataFrame:
+        if laps.empty:
+            return laps
+        laps.columns = [c.lstrip("﻿") for c in laps.columns]
         laps["start_date"] = normalize_dt(laps["start_date"])
         laps["MesAno"]     = mesano_pt(laps["start_date"])
         laps["MesAnoOrd"]  = laps["start_date"].dt.year * 12 + laps["start_date"].dt.month
+        return laps
+
+    # ── Prefer SQLite if DB exists ────────────────────────────────────────────
+    if _HAS_DB and _DB_PATH.exists():
+        try:
+            act  = _db_get_activities()
+            laps = _db_get_laps()
+            act  = _post_process_act(act)
+            laps = _post_process_laps(laps)
+        except Exception:
+            act  = pd.DataFrame()
+            laps = pd.DataFrame()
+    else:
+        # ── Fallback: read from CSV ───────────────────────────────────────────
+        def read(name):
+            p = f"{base}/{name}"
+            return pd.read_csv(p, sep=";", encoding="utf-8-sig") \
+                   if os.path.exists(p) else pd.DataFrame()
+        act  = _post_process_act(read("activities_consolidated.csv"))
+        laps = _post_process_laps(read("activity_laps_consolidated.csv"))
 
     be = pd.DataFrame()  # best_efforts removido — não usado com Garmin
 
@@ -4026,8 +4102,17 @@ with tab_plano:
         hr_abs  = hr_pct * 195
         return round(dur_min * (hr_abs - 45) / (195 - 45), 2)
 
-    # ── Load / save plan ──────────────────────────────────────────────────────
+    # ── Load / save plan (DB-first, JSON fallback) ───────────────────────────
     def _load_plan() -> list:
+        # Prefer SQLite
+        if _HAS_DB:
+            try:
+                _plan_db = _db_get_plan()
+                if _plan_db:
+                    return _plan_db
+            except Exception:
+                pass
+        # Fallback: JSON file
         if _os.path.exists(PLAN_FILE):
             try:
                 with open(PLAN_FILE) as _f:
@@ -4037,6 +4122,13 @@ with tab_plano:
         return []
 
     def _save_plan(plan: list):
+        # Write to DB
+        if _HAS_DB:
+            try:
+                _db_save_plan(plan)
+            except Exception:
+                pass
+        # Also keep JSON file as backup
         _os.makedirs(_os.path.dirname(PLAN_FILE), exist_ok=True)
         with open(PLAN_FILE, "w") as _f:
             _json.dump(plan, _f, ensure_ascii=False, indent=2)
