@@ -27,6 +27,14 @@ CONSOLIDATED  = PROJECT_ROOT / "data" / "processed" / "activities_consolidated.c
 INSIGHTS_FILE = PROJECT_ROOT / "data" / "processed" / "garmin_insights.json"
 GARMIN_START  = "2025-03-01"   # earliest Garmin data available
 
+# ── DB layer (optional — graceful fallback if src.db not available) ───────────
+def _try_import_db():
+    try:
+        from src.db.queries import upsert_activities, upsert_laps, upsert_garmin_insights
+        return upsert_activities, upsert_laps, upsert_garmin_insights
+    except ImportError:
+        return None, None, None
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Activities sync
@@ -93,6 +101,15 @@ def save_activities(df: pd.DataFrame) -> None:
     CONSOLIDATED.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(CONSOLIDATED, index=False, sep=";")
     print(f"✅ Saved {len(df)} activities to {CONSOLIDATED}")
+
+    # ── Also write to SQLite ─────────────────────────────────────────────────
+    upsert_act, _, _ = _try_import_db()
+    if upsert_act:
+        try:
+            n = upsert_act(df)
+            print(f"✅ SQLite: {n} activities upserted")
+        except Exception as _e:
+            print(f"  [SQLite] activities skipped: {_e}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -258,11 +275,18 @@ def refresh_garmin_insights() -> None:
         json.dump(insights, f, ensure_ascii=False, indent=2)
     print(f"OK garmin_insights.json saved ({today_str})")
 
+    # ── Also write to SQLite ─────────────────────────────────────────────────
+    _, _, upsert_ins = _try_import_db()
+    if upsert_ins:
+        try:
+            upsert_ins(insights)
+            print("OK garmin_insights → SQLite")
+        except Exception as _e:
+            print(f"  [SQLite] insights skipped: {_e}")
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Entry point
-# ─────────────────────────────────────────────────────────────────────────────
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="PerformanceRun sync")
     parser.add_argument("--full",          action="store_true", help="Full backfill from GARMIN_START")
@@ -289,6 +313,17 @@ def main() -> None:
     df = fetch_and_merge(start, today, df_existing)
     df = enrich_polylines(df)
     save_activities(df)
+
+    # Sync laps too
+    try:
+        from src.ingestion.garmin import fetch_garmin_laps
+        from src.db.queries import upsert_laps as _ul
+        _laps_df = fetch_garmin_laps(start, today)
+        if not _laps_df.empty:
+            _n = _ul(_laps_df)
+            print(f"SQLite: {_n} laps upserted")
+    except Exception as _le:
+        print(f"  [laps] skipped: {_le}")
 
     # Always refresh insights after an activity sync
     refresh_garmin_insights()
