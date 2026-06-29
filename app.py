@@ -4367,16 +4367,15 @@ Se não conseguir extrair algum campo, use null."""
             "intensity":"Muito Forte",
             "description":"AQUECIMENTO: 2km ML + 1km Moderado\nSÉRIE: 25x200m Muito Forte c/ 0:45s\nSOLTURA: 2km Trote leve",
         }])
-        _tpl_buf = _io.BytesIO()
-        _tpl_df.to_excel(_tpl_buf, index=False)
-        _tpl_buf.seek(0)
+        _tpl_csv = _tpl_df.to_csv(index=False, sep=";").encode("utf-8")
         _tc1, _tc2 = st.columns([2,1])
         with _tc1:
             st.markdown("Preencha uma planilha com as colunas abaixo e faça o upload. "
-                        "A coluna `date` deve estar no formato **AAAA-MM-DD**.")
+                        "A coluna `date` deve estar no formato **AAAA-MM-DD**. "
+                        "Salve como CSV (separador `;`) ou Excel antes de importar.")
         with _tc2:
-            st.download_button("⬇️ Baixar template", _tpl_buf, "template_treinos.xlsx",
-                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            st.download_button("⬇️ Baixar template (CSV)", _tpl_csv, "template_treinos.csv",
+                               mime="text/csv",
                                key="dl_tpl")
 
         _sheet_up = st.file_uploader("📂 Upload da planilha preenchida",

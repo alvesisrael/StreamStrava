@@ -7,3 +7,4 @@ folium
 pydeck
 srtm.py
 requests
+openpyxl
