@@ -4269,8 +4269,168 @@ Se não conseguir extrair algum campo, use null."""
                         for e in errors:
                             st.error(f"❌ {e}")
 
+    # ── Cadastro manual ───────────────────────────────────────────────────────
+    with st.expander("✏️ Cadastrar treino manualmente", expanded=False):
+        with st.form("plan_manual_form", clear_on_submit=True):
+            _fm1, _fm2, _fm3 = st.columns(3)
+            with _fm1:
+                _m_date   = st.date_input("📅 Data", value=_date.today())
+                _m_dist   = st.number_input("📏 Distância (km)", min_value=0.0, max_value=120.0,
+                                            value=10.0, step=0.5)
+                _m_elev   = st.text_input("⛰️ Altimetria D+", placeholder="Ex: 900-1300m D+")
+            with _fm2:
+                _m_type   = st.selectbox("🏷️ Tipo de treino",
+                    ["Longo","Intervalado","Regenerativo","Força","Corrida","Fartlek","Treino de Ritmo","TrailRun"])
+                _m_intens = st.selectbox("🔥 Intensidade",
+                    ["Muito Leve","Leve","Moderado","Moderado Firme","Forte","Muito Forte",
+                     "Trote","Trote/Regenerativo"])
+                _m_course = st.text_input("🗺️ Percurso", placeholder="Ex: Trilhas com boa altimetria")
+            with _fm3:
+                _m_title  = st.text_input("📌 Título", placeholder="Ex: Foco nas subidas")
+
+            _m_desc = st.text_area("📝 Descrição do treinador (cole o texto completo)",
+                                   height=140,
+                                   placeholder="Aquecimento articular + exercícios de deslocamento...\n\nSÉRIE PRINCIPAL:\n3 x 4km Firme a Forte...")
+            _m_blocks_raw = st.text_area(
+                "🧱 Blocos estruturados (opcional — um por linha)",
+                height=80,
+                placeholder="AQUECIMENTO: 2km Muito Leve\nSÉRIE: 25x200m Muito Forte rec 0:45s\nSOLTURA: 2km Trote leve",
+            )
+            _m_ok = st.form_submit_button("💾 Salvar treino", use_container_width=True, type="primary")
+
+        if _m_ok:
+            _m_date_str = str(_m_date)
+            _m_blocks = []
+            for _bl in _m_blocks_raw.strip().split("\n"):
+                _bl = _bl.strip()
+                if _bl:
+                    # parse "SÉRIE: 25x200m Forte rec 0:45s" → structured block
+                    import re as _re2
+                    _reps_match = _re2.match(r"(\d+)\s*[xX×]\s*([\d.,]+)\s*(m|km)", _bl)
+                    if _reps_match:
+                        _bdist = float(_reps_match.group(2))
+                        if _reps_match.group(3) == "m":
+                            _bdist /= 1000
+                        _rest_m = _re2.search(r"rec\s*([\d:]+\s*(?:min|s|seg)?)", _bl, _re2.I)
+                        _m_blocks.append({
+                            "reps": int(_reps_match.group(1)),
+                            "distance_km": round(_bdist, 3),
+                            "intensity": "Forte",
+                            "rest": _rest_m.group(1) if _rest_m else "",
+                            "note": _bl,
+                        })
+                    else:
+                        _m_blocks.append({"note": _bl})
+
+            _new_wo = {
+                "date":          _m_date_str,
+                "title":         _m_title or None,
+                "training_type": _m_type,
+                "course":        _m_course or None,
+                "distance_km":   _m_dist,
+                "elevation_gain":_m_elev or None,
+                "intensity":     _m_intens,
+                "description":   _m_desc or None,
+                "blocks":        _m_blocks,
+                "training_load": _est_load(_m_dist, _m_intens),
+            }
+            _exist_dates = {s["date"] for s in plan_data if "date" in s}
+            if _m_date_str in _exist_dates:
+                st.warning(f"⚠️ Já existe um treino em {_m_date_str}. Remova-o antes de substituir.")
+            else:
+                plan_data.append(_new_wo)
+                plan_data.sort(key=lambda x: x.get("date",""))
+                _save_plan(plan_data)
+                st.success(f"✅ Treino de {_m_date_str} salvo no banco!")
+                st.rerun()
+
+    # ── Importação por planilha ───────────────────────────────────────────────
+    with st.expander("📊 Importar planilha (Excel / CSV)", expanded=False):
+        import io as _io
+        # Template download
+        _tpl_df = pd.DataFrame([{
+            "date":"2026-07-04", "title":"Foco nas subidas",
+            "training_type":"Longo", "course":"Trilhas com boa altimetria",
+            "distance_km":25.0, "elevation_gain":"900-1300m D+",
+            "intensity":"Moderado",
+            "description":"Terreno variado, foco nas subidas. Aquecimento articular...",
+        },{
+            "date":"2026-07-06", "title":"",
+            "training_type":"Regenerativo", "course":"Plano",
+            "distance_km":12.0, "elevation_gain":"",
+            "intensity":"Trote/Regenerativo",
+            "description":"2 exercícios de coordenação e técnica.",
+        },{
+            "date":"2026-07-08", "title":"25x200m",
+            "training_type":"Intervalado", "course":"Plano",
+            "distance_km":10.0, "elevation_gain":"",
+            "intensity":"Muito Forte",
+            "description":"AQUECIMENTO: 2km ML + 1km Moderado\nSÉRIE: 25x200m Muito Forte c/ 0:45s\nSOLTURA: 2km Trote leve",
+        }])
+        _tpl_buf = _io.BytesIO()
+        _tpl_df.to_excel(_tpl_buf, index=False)
+        _tpl_buf.seek(0)
+        _tc1, _tc2 = st.columns([2,1])
+        with _tc1:
+            st.markdown("Preencha uma planilha com as colunas abaixo e faça o upload. "
+                        "A coluna `date` deve estar no formato **AAAA-MM-DD**.")
+        with _tc2:
+            st.download_button("⬇️ Baixar template", _tpl_buf, "template_treinos.xlsx",
+                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                               key="dl_tpl")
+
+        _sheet_up = st.file_uploader("📂 Upload da planilha preenchida",
+                                     type=["xlsx","xls","csv"], key="plan_sheet_up")
+        if _sheet_up:
+            try:
+                if _sheet_up.name.endswith(".csv"):
+                    _sdf = pd.read_csv(_sheet_up)
+                else:
+                    _sdf = pd.read_excel(_sheet_up)
+                _sdf.columns = [c.strip().lower().replace(" ","_") for c in _sdf.columns]
+                if "date" not in _sdf.columns:
+                    st.error("❌ Coluna 'date' não encontrada na planilha.")
+                else:
+                    _sdf["date"] = pd.to_datetime(_sdf["date"], errors="coerce").dt.strftime("%Y-%m-%d")
+                    _sdf = _sdf.dropna(subset=["date"])
+                    st.dataframe(_sdf[["date","title","training_type","distance_km","intensity"]].head(10),
+                                 use_container_width=True)
+                    st.caption(f"{len(_sdf)} treino(s) encontrados na planilha")
+                    if st.button(f"📥 Importar {len(_sdf)} treino(s)", key="sheet_import_btn", type="primary"):
+                        _exist_d = {s["date"] for s in plan_data if "date" in s}
+                        _added = 0
+                        for _, _row in _sdf.iterrows():
+                            _rd = str(_row.get("date","")).strip()
+                            if not _rd or _rd in _exist_d:
+                                continue
+                            _rdist = float(_row.get("distance_km", 0) or 0)
+                            _rint  = str(_row.get("intensity","Moderado") or "Moderado")
+                            plan_data.append({
+                                "date":          _rd,
+                                "title":         str(_row.get("title","") or "") or None,
+                                "training_type": str(_row.get("training_type","") or ""),
+                                "course":        str(_row.get("course","") or "") or None,
+                                "distance_km":   _rdist,
+                                "elevation_gain":str(_row.get("elevation_gain","") or "") or None,
+                                "intensity":     _rint,
+                                "description":   str(_row.get("description","") or "") or None,
+                                "blocks":        [],
+                                "training_load": _est_load(_rdist, _rint),
+                            })
+                            _exist_d.add(_rd)
+                            _added += 1
+                        if _added:
+                            plan_data.sort(key=lambda x: x.get("date",""))
+                            _save_plan(plan_data)
+                            st.success(f"✅ {_added} treino(s) importado(s) para o banco!")
+                            st.rerun()
+                        else:
+                            st.info("Nenhum treino novo (datas já existentes ou planilha vazia).")
+            except Exception as _se:
+                st.error(f"Erro ao ler planilha: {_se}")
+
     if not plan_data:
-        st.info("📭 Nenhum treino planejado ainda. Importe screenshots acima.")
+        st.info("📭 Nenhum treino planejado ainda. Use uma das opções acima para importar.")
         st.stop()
 
     # ── Filter: only future + today ───────────────────────────────────────────
@@ -4608,14 +4768,14 @@ Se não conseguir extrair algum campo, use null."""
 
     st.markdown("---")
 
-    # ── CALENDÁRIO DE TREINOS FUTUROS ─────────────────────────────────────────
+    # ── CALENDÁRIO DE TREINOS FUTUROS ─────────────────────────────────────────────
     st.markdown("#### 🗓️ Próximos treinos")
 
     _INT_COLOR_PLAN = {
-        "Muito Leve": "#27AE60", "Leve": "#2ECC71", "Trote": "#1ABC9C",
-        "Trote/Regenerativo": "#1ABC9C", "Regenerativo": "#1ABC9C",
-        "Moderado": "#F1C40F", "Moderado Firme": "#E67E22", "Moderado-firme": "#E67E22",
-        "Forte": "#E74C3C", "Muito Forte": "#922B21",
+        "Muito Leve":"#27AE60","Leve":"#2ECC71","Trote":"#1ABC9C",
+        "Trote/Regenerativo":"#1ABC9C","Regenerativo":"#1ABC9C",
+        "Moderado":"#F1C40F","Moderado Firme":"#E67E22","Moderado-firme":"#E67E22",
+        "Forte":"#E74C3C","Muito Forte":"#922B21",
     }
     _INT_ICON = {
         "Muito Leve":"🟢","Leve":"🟢","Trote":"🟢","Trote/Regenerativo":"🟢","Regenerativo":"🟢",
@@ -4624,116 +4784,100 @@ Se não conseguir extrair algum campo, use null."""
     }
     _TYPE_ICON = {
         "Longo":"🏔️","Intervalado":"⚡","Regenerativo":"💤","Treino de Ritmo":"🎯",
-        "Corrida":"🏃","TrailRun":"🌲","Trail":"🌲","Fartlek":"🔀",
+        "Corrida":"🏃","TrailRun":"🌲","Trail":"🌲","Fartlek":"🔀","Força":"💪",
     }
 
     plan_future["week"] = plan_future["date"].dt.to_period("W")
     _weeks_list = list(plan_future.groupby("week"))
 
     for _wi, (_wk, _wk_df) in enumerate(_weeks_list):
-        _wk_start  = _wk.start_time.strftime("%d/%m")
-        _wk_end    = _wk.end_time.strftime("%d/%m")
-        _wk_km     = _wk_df["distance_km"].sum() if "distance_km" in _wk_df.columns else 0
-        _wk_load   = (_wk_df["training_load"].sum() if "training_load" in _wk_df.columns else 0) or 0
-        _wk_dplus  = _wk_df["_elev_m"].sum() if "_elev_m" in _wk_df.columns else 0
-        _wk_days   = _wk_df["date"].nunique()
-        # Check how many completed
-        _wk_done = 0
+        _wk_start = _wk.start_time.strftime("%d/%m")
+        _wk_end   = _wk.end_time.strftime("%d/%m")
+        _wk_km    = _wk_df["distance_km"].sum() if "distance_km" in _wk_df.columns else 0
+        _wk_load  = (_wk_df["training_load"].sum() if "training_load" in _wk_df.columns else 0) or 0
+        _wk_dplus = _wk_df["_elev_m"].sum() if "_elev_m" in _wk_df.columns else 0
+        _wk_days  = _wk_df["date"].nunique()
+        _wk_done  = 0
         if not df_run.empty:
             for _d in _wk_df["date"]:
                 if len(df_run[df_run["start_date"].dt.date == _d.date()]) > 0:
                     _wk_done += 1
-        _wk_prog = f"{_wk_done}/{_wk_days} ✅" if _wk_done > 0 else f"{_wk_days} treinos"
-        _wk_title = (
-            f"**Semana {_wk_start}–{_wk_end}** · {_wk_km:.0f} km"
-            + (f" · 📐 {_wk_dplus:.0f} m D+" if _wk_dplus > 0 else "")
-            + f" · {_wk_prog}"
-        )
-        with st.expander(_wk_title, expanded=(_wi == 0)):
-            for _, row in _wk_df.sort_values("date").iterrows():
-                _dt    = row["date"]
-                _dow   = ["Seg","Ter","Qua","Qui","Sex","Sáb","Dom"][_dt.weekday()]
-                _int   = str(row.get("intensity") or "Moderado").strip()
-                _col   = _INT_COLOR_PLAN.get(_int, "#7F8C8D")
-                _iico  = _INT_ICON.get(_int, "⚪")
-                _km    = row.get("distance_km")
-                _type  = str(row.get("training_type") or "Corrida").strip()
-                _tico  = _TYPE_ICON.get(_type, "🏃")
-                _title = str(row.get("title") or "").strip()
-                _desc  = str(row.get("description") or "").strip()
-                _elev  = str(row.get("elevation_gain") or "").strip()
-                _course= str(row.get("course") or "").strip()
-                _tl    = row.get("training_load")
-                _blocks= row.get("blocks") or []
+        _wk_prog  = f"{_wk_done}/{_wk_days} ✅" if _wk_done > 0 else f"{_wk_days} treinos"
+        _dplus_str = f" · ⛰️ {_wk_dplus:.0f}m D+" if _wk_dplus > 0 else ""
+        _load_str  = f" · 🔥 {_wk_load:.0f} load" if _wk_load > 0 else ""
 
-                # Completed check
-                _done = not df_run.empty and len(df_run[df_run["start_date"].dt.date == _dt.date()]) > 0
+        with st.expander(
+            f"**Semana {_wk_start}–{_wk_end}** · 📏 {_wk_km:.0f} km{_dplus_str}{_load_str} · {_wk_prog}",
+            expanded=(_wi == 0)
+        ):
+            for _, _wo in _wk_df.iterrows():
+                _dt_label  = _wo["date"].strftime("%A %d/%m").capitalize()
+                _wtype     = str(_wo.get("training_type","") or "")
+                _intens    = str(_wo.get("intensity","") or "")
+                _dist      = _wo.get("distance_km")
+                _elev      = _wo.get("_elev_m",0) or 0
+                _title     = str(_wo.get("title","") or "")
+                _desc      = str(_wo.get("description","") or "")
+                _blocks    = _wo.get("blocks",[]) or []
+                _course    = str(_wo.get("course","") or "")
+                _bc        = _INT_COLOR_PLAN.get(_intens,"#aaa")
+                _bico      = _INT_ICON.get(_intens,"⚪")
+                _ticon     = _TYPE_ICON.get(_wtype,"🏃")
 
-                # ── Header card ──────────────────────────────────────────
+                # Header row
+                _dist_str = f"{float(_dist):.1f} km" if _dist else ""
+                _elev_str = f" · ⛰️ {_elev:.0f}m D+" if _elev > 0 else ""
+                _course_str = f" · 📍 {_course}" if _course and _course not in ("None","nan") else ""
                 st.markdown(
-                    f"{'✅' if _done else '⏳'} **{_dow} {_dt.strftime('%d/%m/%Y')}**",
+                    f"<div style='border-left:4px solid {_bc};padding:6px 12px;margin-bottom:6px'>"
+                    f"<b>{_dt_label}</b> &nbsp;{_ticon} {_wtype}"
+                    f"&nbsp;·&nbsp;<span style='color:{_bc}'>{_bico} {_intens}</span>"
+                    f"&nbsp;·&nbsp;{_dist_str}{_elev_str}{_course_str}</div>",
                     unsafe_allow_html=True
                 )
-                # Metadata row
-                _meta = []
-                _meta.append(f"<span style='color:{_col};font-weight:600'>{_iico} {_int}</span>")
-                _meta.append(f"{_tico} **{_type}**")
-                if _km: _meta.append(f"📏 **{_km:.0f} km**")
-                if _elev: _meta.append(f"📐 **{_elev}**")
-                if _course and _course not in ("None","nan",""): _meta.append(f"🗺️ {_course}")
-                if _tl: _meta.append(f"⚡ carga ~{float(_tl):.0f}")
-                st.markdown(" &nbsp;|&nbsp; ".join(_meta), unsafe_allow_html=True)
-
-                # Title (bold, coach name for the session)
                 if _title and _title not in ("None","nan",""):
                     st.markdown(f"&nbsp;&nbsp;📌 **{_title}**")
-
-                # Description — full text, paragraph by paragraph
                 if _desc and _desc not in ("None","nan",""):
                     _paras = [p.strip() for p in _desc.replace("\r\n","\n").replace("\r","\n").split("\n") if p.strip()]
-                    with st.container():
-                        for _p in _paras:
-                            st.caption(_p)
-
-                # Blocks (structured intervals)
+                    for _p in _paras:
+                        st.caption(_p)
                 if isinstance(_blocks, list) and len(_blocks) > 0:
                     _valid_blocks = [b for b in _blocks if isinstance(b, dict)]
                     if _valid_blocks:
                         st.markdown("&nbsp;&nbsp;**Estrutura do treino:**")
                         for _b in _valid_blocks:
                             _bi   = str(_b.get("intensity","")).strip()
-                            _bc   = _INT_COLOR_PLAN.get(_bi, "#aaa")
-                            _bico = _INT_ICON.get(_bi, "⚪")
+                            _bc2  = _INT_COLOR_PLAN.get(_bi,"#aaa")
+                            _bico2= _INT_ICON.get(_bi,"⚪")
                             _note = str(_b.get("note","")).strip()
                             _rest = str(_b.get("rest","")).strip()
                             if _b.get("reps"):
-                                _bdist = _b.get('distance_km','')
-                                # Convert to meters if < 1 km
-                                _bdist_str = f"{float(_bdist)*1000:.0f}m" if _bdist and float(_bdist) < 1 else (f"{float(_bdist):.1f}km" if _bdist else "")
-                                _bline = f"<span style='color:{_bc}'>{'&nbsp;'*4}{_bico} **{_b['reps']}×{_bdist_str}** {_bi}"
+                                _bdist = _b.get("distance_km","")
+                                _bdist_str = f"{float(_bdist)*1000:.0f}m" if _bdist and float(_bdist)<1 else (f"{float(_bdist):.1f}km" if _bdist else "")
+                                _bline = f"<span style='color:{_bc2}'>{'&nbsp;'*4}{_bico2} **{_b['reps']}×{_bdist_str}** {_bi}"
                                 if _rest: _bline += f" <span style='color:#aaa'>rec {_rest}</span>"
                                 _bline += "</span>"
                             elif _b.get("distance_km"):
-                                _bdist = float(_b['distance_km'])
+                                _bdist = float(_b["distance_km"])
                                 _bdist_str = f"{_bdist*1000:.0f}m" if _bdist < 1 else f"{_bdist:.1f}km"
-                                _bline = f"<span style='color:{_bc}'>{'&nbsp;'*4}{_bico} **{_bdist_str}** {_bi}"
+                                _bline = f"<span style='color:{_bc2}'>{'&nbsp;'*4}{_bico2} **{_bdist_str}** {_bi}"
                                 if _note and _note not in ("None","nan",""): _bline += f" <span style='color:#aaa'>— {_note}</span>"
                                 _bline += "</span>"
+                            elif _note:
+                                _bline = f"<span style='color:#aaa'>{'&nbsp;'*4}▸ {_note}</span>"
                             else:
                                 continue
                             st.markdown(_bline, unsafe_allow_html=True)
-
                 st.markdown("<hr style='margin:8px 0;border-color:#333'>", unsafe_allow_html=True)
 
-    # ── MANAGE PLAN ────────────────────────────────────────────────────────────────────────
+    # ── GERENCIAR PLANO ───────────────────────────────────────────────────────
     with st.expander("🗑️ Gerenciar plano (remover treinos)"):
         if plan_data:
             _del_opts = {
-                f"{s.get('date','')} — {s.get('training_type','?')}: {s.get('distance_km','?')}km": i
+                f"{s.get('date','')} — {s.get('training_type','?')} {s.get('distance_km','?')}km": i
                 for i, s in enumerate(plan_data)
             }
-            _to_del = st.multiselect("Selecione para remover:", list(_del_opts.keys()),
-                                     key="plan_del_select")
+            _to_del = st.multiselect("Selecione para remover:", list(_del_opts.keys()), key="plan_del_select")
             if _to_del and st.button("🗑️ Remover selecionados", key="plan_del_btn"):
                 _idxs = sorted({_del_opts[k] for k in _to_del}, reverse=True)
                 for _i in _idxs:
@@ -4746,7 +4890,12 @@ Se não conseguir extrair algum campo, use null."""
 
     st.markdown("---")
     if GROQ_KEY and len(GROQ_KEY) >= 20:
-        _ctx_plano = f"""Plano de treino atual com {len(plan_data)} treinos cadastrados.
-Proximos treinos: {[f"{s.get('date')} {s.get('training_type')} {s.get('distance_km')}km" for s in plan_future.head(5).to_dict('records')] if not plan_future.empty else []}.
-"""
+        _upcoming = [
+            f"{s.get('date')} {s.get('training_type')} {s.get('distance_km')}km"
+            for s in plan_future.head(5).to_dict('records')
+        ] if not plan_future.empty else []
+        _ctx_plano = (
+            f"Plano de treino atual: {len(plan_data)} treinos cadastrados. "
+            f"Proximos: {_upcoming}."
+        )
         _groq_widget("Plano", _ctx_plano, "plano")
