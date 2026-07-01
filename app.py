@@ -4137,12 +4137,17 @@ with tab_plano:
         return []
 
     def _save_plan(plan: list):
-        # Write to DB
+        # Write to DB — clear first so deleted entries are actually removed
         if _HAS_DB:
             try:
-                _db_save_plan(plan)
-            except Exception:
-                pass
+                import sqlite3 as _sl3
+                _sl3_conn = _sl3.connect(str(_DB_PATH), check_same_thread=False)
+                with _sl3_conn:
+                    _sl3_conn.execute("DELETE FROM training_plan")
+                _sl3_conn.close()
+                _db_save_plan(plan)  # re-insert remaining
+            except Exception as _se:
+                st.toast(f"⚠️ DB save: {_se}", icon="⚠️")
         # Also keep JSON file as backup
         _os.makedirs(_os.path.dirname(PLAN_FILE), exist_ok=True)
         with open(PLAN_FILE, "w") as _f:
@@ -4242,32 +4247,50 @@ Se não conseguir extrair algum campo, use null."""
                 key="plan_upload"
             )
             if uploaded:
+                _overwrite = st.checkbox("Substituir treinos de datas já cadastradas",
+                                         value=True, key="plan_overwrite")
                 if st.button(f"🔍 Extrair {len(uploaded)} treino(s)", key="plan_extract_btn"):
-                    existing_dates = {s["date"] for s in plan_data if "date" in s}
-                    added = 0
+                    import time as _time
+                    # Build lookup by date for fast replace
+                    _plan_by_date = {s["date"]: s for s in plan_data if "date" in s}
+                    added = skipped = 0
                     errors = []
                     prog = st.progress(0)
-                    for i, f in enumerate(uploaded):
-                        with st.spinner(f"Lendo {f.name}..."):
-                            result = _extract_from_screenshot(f.read(), GROQ_KEY)
+                    status_box = st.empty()
+                    for i, _uf in enumerate(uploaded):
+                        status_box.caption(f"🔍 Processando {_uf.name} ({i+1}/{len(uploaded)})…")
+                        try:
+                            result = _extract_from_screenshot(_uf.read(), GROQ_KEY)
+                        except Exception as _ex:
+                            errors.append(f"{_uf.name}: exceção — {_ex}")
+                            prog.progress((i + 1) / len(uploaded))
+                            continue
                         if result and "error" not in result and result.get("date"):
-                            if result["date"] not in existing_dates:
-                                plan_data.append(result)
-                                existing_dates.add(result["date"])
-                                added += 1
+                            _dt = result["date"]
+                            if _dt in _plan_by_date and not _overwrite:
+                                skipped += 1
+                                status_box.caption(f"⏭️ {_dt} já existe — pulando.")
                             else:
-                                st.info(f"📅 {result['date']} já existe no plano — pulando.")
+                                _plan_by_date[_dt] = result
+                                added += 1
                         else:
-                            errors.append(f"{f.name}: {result.get('error','sem data') if result else 'falha'}")
+                            _err = (result.get("error", "sem data") if isinstance(result, dict) else "resposta vazia")
+                            errors.append(f"{_uf.name}: {_err}")
                         prog.progress((i + 1) / len(uploaded))
+                        _time.sleep(0.3)  # evita rate-limit Groq
+                    status_box.empty()
                     if added:
-                        plan_data.sort(key=lambda x: x.get("date", ""))
+                        plan_data = sorted(_plan_by_date.values(), key=lambda x: x.get("date", ""))
                         _save_plan(plan_data)
-                        st.success(f"✅ {added} treino(s) importado(s) com sucesso!")
+                        st.success(f"✅ {added} treino(s) importado(s)."
+                                   + (f" {skipped} pulado(s) por data duplicada." if skipped else ""))
                         st.rerun()
+                    else:
+                        st.warning("Nenhum treino importado.")
                     if errors:
-                        for e in errors:
-                            st.error(f"❌ {e}")
+                        with st.expander(f"❌ {len(errors)} falha(s) — clique para detalhes"):
+                            for _e in errors:
+                                st.error(_e)
 
     # ── Cadastro manual ───────────────────────────────────────────────────────
     with st.expander("✏️ Cadastrar treino manualmente", expanded=False):
@@ -4869,11 +4892,11 @@ Se não conseguir extrair algum campo, use null."""
                             st.markdown(_bline, unsafe_allow_html=True)
                 st.markdown("<hr style='margin:8px 0;border-color:#333'>", unsafe_allow_html=True)
 
-    # ── GERENCIAR PLANO ───────────────────────────────────────────────────────
+    # ── GERENCIAR PLANO ────────────────────────────────────────────────────────
     with st.expander("🗑️ Gerenciar plano (remover treinos)"):
         if plan_data:
             _del_opts = {
-                f"{s.get('date','')} — {s.get('training_type','?')} {s.get('distance_km','?')}km": i
+                f"{s.get('date','')} — {s.get('training_type','?' )} {s.get('distance_km','?' )}km": i
                 for i, s in enumerate(plan_data)
             }
             _to_del = st.multiselect("Selecione para remover:", list(_del_opts.keys()), key="plan_del_select")
