@@ -849,6 +849,20 @@ _z3 = round(FC_MAX * 0.87); _z4 = round(FC_MAX * 0.93)
 st.sidebar.caption(
     f"Z1 < {_z1} · Z2 {_z1}–{_z2} · Z3 {_z2}–{_z3} · Z4 {_z3}–{_z4} · Z5 ≥ {_z4}"
 )
+st.sidebar.markdown("---")
+st.sidebar.markdown("**🎯 Metas mensais**")
+META_KM_MES = st.sidebar.number_input(
+    "📏 Meta de km/mês", min_value=0, max_value=600,
+    value=st.session_state.get("meta_km_val", 150), step=10, key="meta_km_val"
+)
+META_TR_MES = st.sidebar.number_input(
+    "🏃 Meta de treinos/mês", min_value=0, max_value=40,
+    value=st.session_state.get("meta_tr_val", 16), step=1, key="meta_tr_val"
+)
+META_DP_MES = st.sidebar.number_input(
+    "⛰️ Meta D+ mensal (m)", min_value=0, max_value=20000,
+    value=st.session_state.get("meta_dp_val", 3000), step=100, key="meta_dp_val"
+)
 
 # Recalcula Zona FC com FCmax personalizado — VETORIZADO
 if not laps_raw.empty:
@@ -1009,6 +1023,150 @@ with tab_hoje:
 
     km_7d = float(ult7d["distance_km"].sum())
 
+    # ── HERO: Última atividade | Próximo treino | Garmin quick ─────────────────
+    _h1, _h2, _h3 = st.columns(3)
+
+    # Card 1 — Última atividade
+    with _h1:
+        if not df_run.empty:
+            _last = df_run.sort_values("start_date").iloc[-1]
+            _last_date = pd.to_datetime(_last["start_date"]).strftime("%d/%m/%Y")
+            _last_pace = fmt_pace(_last.get("pace_sec_km") or 0)
+            _last_fc   = f"{_last.get('average_heartrate',0):.0f}" if _last.get("average_heartrate") else "—"
+            _last_d    = f"{_last.get('distance_km',0):.1f}"
+            _last_dp   = f"{_last.get('elevation_gain',0):.0f}"
+            _last_dur  = _last.get("moving_time_sec") or 0
+            _dur_str   = (f"{int(_last_dur//3600)}h{int((_last_dur%3600)//60):02d}min"
+                          if _last_dur >= 3600 else f"{int(_last_dur//60)}min")
+            _sport_ico = {"TrailRun":"🌲","Cycling":"🚴","Walking":"🚶"}.get(
+                str(_last.get("sport_type","")), "🏃")
+            st.markdown(
+                f"<div style='border:1px solid #2a2a2a;border-radius:12px;padding:16px;height:100%'>"
+                f"<p style='color:#888;font-size:0.72rem;letter-spacing:.05em;margin:0'>🕐 ÚLTIMA ATIVIDADE · {_last_date}</p>"
+                f"<p style='font-size:1.05rem;font-weight:700;margin:6px 0 10px'>{_sport_ico} {_last.get('name','—')}</p>"
+                f"<div style='display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px'>"
+                f"<div><p style='color:#888;font-size:0.68rem;margin:0'>Distância</p>"
+                f"<p style='font-size:1.1rem;font-weight:700;margin:0;color:#3498DB'>{_last_d} km</p></div>"
+                f"<div><p style='color:#888;font-size:0.68rem;margin:0'>Pace</p>"
+                f"<p style='font-size:1.1rem;font-weight:700;margin:0;color:#2ECC71'>{_last_pace}/km</p></div>"
+                f"<div><p style='color:#888;font-size:0.68rem;margin:0'>FC Média</p>"
+                f"<p style='font-size:1.1rem;font-weight:700;margin:0;color:#E74C3C'>{_last_fc} bpm</p></div>"
+                f"<div><p style='color:#888;font-size:0.68rem;margin:0'>D+</p>"
+                f"<p style='font-size:1.1rem;font-weight:700;margin:0'>{_last_dp} m</p></div>"
+                f"<div><p style='color:#888;font-size:0.68rem;margin:0'>Duração</p>"
+                f"<p style='font-size:1.1rem;font-weight:700;margin:0'>{_dur_str}</p></div>"
+                f"</div></div>",
+                unsafe_allow_html=True
+            )
+
+    # Card 2 — Próximo treino planejado
+    with _h2:
+        _plan_next = None
+        try:
+            import json as _jh, os as _oh
+            _pf = _oh.path.join(BASE, "training_plan.json")
+            if _oh.path.exists(_pf):
+                with open(_pf) as _pff:
+                    _plan_raw_h = _jh.load(_pff)
+                _today_h = pd.Timestamp.now().strftime("%Y-%m-%d")
+                _future_h = sorted([p for p in _plan_raw_h if p.get("date","") >= _today_h],
+                                    key=lambda x: x.get("date",""))
+                _plan_next = _future_h[0] if _future_h else None
+        except Exception:
+            pass
+        _int_clr = {"Muito Leve":"#27AE60","Leve":"#2ECC71","Trote":"#1ABC9C",
+                    "Moderado":"#F1C40F","Moderado Firme":"#E67E22","Moderado-firme":"#E67E22",
+                    "Forte":"#E74C3C","Muito Forte":"#922B21"}
+        if _plan_next:
+            _pn_date  = pd.to_datetime(_plan_next.get("date","")).strftime("%d/%m/%Y")
+            _pn_type  = _plan_next.get("training_type","—")
+            _pn_int   = _plan_next.get("intensity","—")
+            _pn_dist  = _plan_next.get("distance_km","—")
+            _pn_title = _plan_next.get("title") or ""
+            _pn_elev  = _plan_next.get("elevation_gain") or "—"
+            _pn_cor   = _int_clr.get(_pn_int,"#aaa")
+            _days_u   = (pd.to_datetime(_plan_next.get("date","")) - pd.Timestamp.now().normalize()).days
+            _days_s   = "🎯 Hoje!" if _days_u == 0 else ("🔜 Amanhã" if _days_u == 1 else f"📅 em {_days_u} dias")
+            st.markdown(
+                f"<div style='border:1px solid #2a2a2a;border-left:4px solid {_pn_cor};"
+                f"border-radius:12px;padding:16px;height:100%'>"
+                f"<p style='color:#888;font-size:0.72rem;letter-spacing:.05em;margin:0'>"
+                f"📅 PRÓXIMO TREINO · {_pn_date} · <span style='color:{_pn_cor};font-weight:700'>{_days_s}</span></p>"
+                f"<p style='font-size:1.05rem;font-weight:700;margin:6px 0 4px'>{_pn_type}</p>"
+                + (f"<p style='font-size:0.8rem;color:#aaa;margin:0 0 8px'>{_pn_title}</p>" if _pn_title else "<div style='margin-bottom:8px'></div>")
+                + f"<div style='display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px'>"
+                f"<div><p style='color:#888;font-size:0.68rem;margin:0'>Intensidade</p>"
+                f"<p style='font-size:0.95rem;font-weight:700;color:{_pn_cor};margin:0'>{_pn_int}</p></div>"
+                f"<div><p style='color:#888;font-size:0.68rem;margin:0'>Distância</p>"
+                f"<p style='font-size:0.95rem;font-weight:700;margin:0'>{_pn_dist} km</p></div>"
+                f"<div><p style='color:#888;font-size:0.68rem;margin:0'>D+</p>"
+                f"<p style='font-size:0.95rem;font-weight:700;margin:0'>{_pn_elev} m</p></div>"
+                f"</div></div>",
+                unsafe_allow_html=True
+            )
+        else:
+            st.markdown(
+                "<div style='border:1px solid #2a2a2a;border-radius:12px;padding:16px;opacity:0.6;height:100%'>"
+                "<p style='color:#888;font-size:0.72rem;margin:0'>📅 PRÓXIMO TREINO</p>"
+                "<p style='margin:8px 0;color:#aaa'>Nenhum treino planejado.</p>"
+                "<p style='font-size:0.75rem;color:#666'>→ Adicione treinos na aba <b>Plano</b></p>"
+                "</div>",
+                unsafe_allow_html=True
+            )
+
+    # Card 3 — Garmin Quick Stats
+    with _h3:
+        @st.cache_data(ttl=3600, show_spinner=False)
+        def _load_gi_dash():
+            import json as _jgi, os as _ogi
+            _p = _ogi.path.join(BASE, "garmin_insights.json")
+            if not _ogi.path.exists(_p): return {}
+            with open(_p) as _f: return _jgi.load(_f)
+        _gi_d = _load_gi_dash()
+        if _gi_d:
+            _vo2_d   = _gi_d.get("vo2max",{}).get("current")
+            _rhr_d   = _gi_d.get("rhr_today")
+            _rp_d    = _gi_d.get("race_predictions",{})
+            _half_d  = _rp_d.get("half_marathon",{})
+            _5k_d    = _rp_d.get("5K",{})
+            _10k_d   = _rp_d.get("10K",{})
+            _vo2_cat_d = ("Elite" if (_vo2_d or 0)>=60 else "Superior" if (_vo2_d or 0)>=55
+                          else "Excelente" if (_vo2_d or 0)>=49 else "Bom" if (_vo2_d or 0)>=43 else "Médio")
+            _rhr_cat_d = ("Atleta" if (_rhr_d or 99)<=45 else "Excelente" if (_rhr_d or 99)<=52
+                          else "Bom" if (_rhr_d or 99)<=59 else "Normal")
+            _upd_d = _gi_d.get("updated_at","")
+            st.markdown(
+                f"<div style='border:1px solid #2a2a2a;border-radius:12px;padding:16px;height:100%'>"
+                f"<p style='color:#888;font-size:0.72rem;letter-spacing:.05em;margin:0'>🏅 GARMIN INSIGHTS · {_upd_d}</p>"
+                f"<div style='display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:10px'>"
+                f"<div><p style='color:#888;font-size:0.68rem;margin:0'>🫁 VO₂max</p>"
+                f"<p style='font-size:1.5rem;font-weight:800;margin:0;color:#3498DB'>{f'{_vo2_d:.0f}' if _vo2_d else '—'}</p>"
+                f"<p style='font-size:0.68rem;color:#27AE60;margin:0'>{_vo2_cat_d}</p></div>"
+                f"<div><p style='color:#888;font-size:0.68rem;margin:0'>❤️ FC Repouso</p>"
+                f"<p style='font-size:1.5rem;font-weight:800;margin:0;color:#E74C3C'>{_rhr_d or '—'}</p>"
+                f"<p style='font-size:0.68rem;color:#aaa;margin:0'>{_rhr_cat_d}</p></div>"
+                f"<div><p style='color:#888;font-size:0.68rem;margin:0'>🏅 21K</p>"
+                f"<p style='font-size:1.3rem;font-weight:800;margin:0;color:#F1C40F'>{_half_d.get('time','—')}</p>"
+                f"<p style='font-size:0.68rem;color:#aaa;margin:0'>previsão</p></div>"
+                f"<div><p style='color:#888;font-size:0.68rem;margin:0'>⚡ 5K</p>"
+                f"<p style='font-size:1.1rem;font-weight:700;margin:0'>{_5k_d.get('time','—')}</p></div>"
+                f"<div><p style='color:#888;font-size:0.68rem;margin:0'>🏃 10K</p>"
+                f"<p style='font-size:1.1rem;font-weight:700;margin:0'>{_10k_d.get('time','—')}</p></div>"
+                f"</div></div>",
+                unsafe_allow_html=True
+            )
+        else:
+            st.markdown(
+                "<div style='border:1px solid #2a2a2a;border-radius:12px;padding:16px;opacity:0.5;height:100%'>"
+                "<p style='color:#888;font-size:0.72rem;margin:0'>🏅 GARMIN INSIGHTS</p>"
+                "<p style='margin:8px 0;font-size:0.85rem'>Sem dados Garmin.</p>"
+                "<p style='font-size:0.72rem;color:#666'>Execute <code>python sync.py</code> para carregar.</p>"
+                "</div>",
+                unsafe_allow_html=True
+            )
+
+    st.markdown("---")
+
     # Mês corrente
     mes_run = df_run[df_run["start_date"].dt.to_period("M") == hoje.to_period("M")]
     km_mes  = float(mes_run["distance_km"].sum())
@@ -1120,11 +1278,27 @@ with tab_hoje:
     # ── Metas do mês (simples) ────────────────────────────────────────────────
     st.markdown("---")
     st.subheader("🎯 Metas do Mês")
+    _elev_mes = int(df_run[df_run['start_date'].dt.to_period('M') == pd.Timestamp.now().to_period('M')]['elevation_gain'].sum())
+    _fc_med_mes = df_run['average_heartrate'].mean()
     mg1, mg2, mg3, mg4 = st.columns(4)
-    mg1.metric("📏 KM este mês",  f"{km_mes:.0f} km",    f"{km_mes/150*100:.0f}% de 150 km")
-    mg2.metric("🏃 Treinos",      f"{tr_mes}",            f"{tr_mes/16*100:.0f}% de 16")
-    mg3.metric("🏔️ Elev. este mês", f"{int(df_run[df_run['start_date'].dt.to_period('M') == pd.Timestamp.now().to_period('M')]['elevation_gain'].sum())} m")
-    mg4.metric("💓 FC Média",       f"{df_run['average_heartrate'].mean():.0f} bpm" if df_run["average_heartrate"].notna().any() else "—")
+    _pct_km = min(km_mes / META_KM_MES * 100, 100) if META_KM_MES > 0 else 0
+    with mg1:
+        st.metric("📏 KM este mês", f"{km_mes:.0f} km",
+                  f"{_pct_km:.0f}% da meta · faltam {max(0, META_KM_MES - km_mes):.0f} km")
+        st.progress(min(_pct_km/100, 1.0))
+    _pct_tr = min(tr_mes / META_TR_MES * 100, 100) if META_TR_MES > 0 else 0
+    with mg2:
+        st.metric("🏃 Treinos", f"{tr_mes}",
+                  f"{_pct_tr:.0f}% da meta · faltam {max(0, META_TR_MES - tr_mes)}")
+        st.progress(min(_pct_tr/100, 1.0))
+    _pct_dp = min(_elev_mes / META_DP_MES * 100, 100) if META_DP_MES > 0 else 0
+    with mg3:
+        st.metric("🏔️ D+ este mês", f"{_elev_mes:,} m",
+                  f"{_pct_dp:.0f}% da meta · faltam {max(0, META_DP_MES - _elev_mes):,} m")
+        st.progress(min(_pct_dp/100, 1.0))
+    with mg4:
+        st.metric("💓 FC Média", f"{_fc_med_mes:.0f} bpm" if df_run["average_heartrate"].notna().any() else "—",
+                  help="FC média de todas as corridas no período filtrado")
 
     # ── 🔥 Streak de semanas ativas ──────────────────────────────────────────
     st.markdown("---")
@@ -4960,84 +5134,4 @@ Se não conseguir extrair algum campo, use null."""
                 _elev      = _wo.get("_elev_m",0) or 0
                 _title     = str(_wo.get("title","") or "")
                 _desc      = str(_wo.get("description","") or "")
-                _blocks    = _wo.get("blocks",[]) or []
-                _course    = str(_wo.get("course","") or "")
-                _bc        = _INT_COLOR_PLAN.get(_intens,"#aaa")
-                _bico      = _INT_ICON.get(_intens,"⚪")
-                _ticon     = _TYPE_ICON.get(_wtype,"🏃")
-
-                # Header row
-                _dist_str = f"{float(_dist):.1f} km" if _dist else ""
-                _elev_str = f" · ⛰️ {_elev:.0f}m D+" if _elev > 0 else ""
-                _course_str = f" · 📍 {_course}" if _course and _course not in ("None","nan") else ""
-                st.markdown(
-                    f"<div style='border-left:4px solid {_bc};padding:6px 12px;margin-bottom:6px'>"
-                    f"<b>{_dt_label}</b> &nbsp;{_ticon} {_wtype}"
-                    f"&nbsp;·&nbsp;<span style='color:{_bc}'>{_bico} {_intens}</span>"
-                    f"&nbsp;·&nbsp;{_dist_str}{_elev_str}{_course_str}</div>",
-                    unsafe_allow_html=True
-                )
-                if _title and _title not in ("None","nan",""):
-                    st.markdown(f"&nbsp;&nbsp;📌 **{_title}**")
-                if _desc and _desc not in ("None","nan",""):
-                    _paras = [p.strip() for p in _desc.replace("\r\n","\n").replace("\r","\n").split("\n") if p.strip()]
-                    for _p in _paras:
-                        st.caption(_p)
-                if isinstance(_blocks, list) and len(_blocks) > 0:
-                    _valid_blocks = [b for b in _blocks if isinstance(b, dict)]
-                    if _valid_blocks:
-                        st.markdown("&nbsp;&nbsp;**Estrutura do treino:**")
-                        for _b in _valid_blocks:
-                            _bi   = str(_b.get("intensity","")).strip()
-                            _bc2  = _INT_COLOR_PLAN.get(_bi,"#aaa")
-                            _bico2= _INT_ICON.get(_bi,"⚪")
-                            _note = str(_b.get("note","")).strip()
-                            _rest = str(_b.get("rest","")).strip()
-                            if _b.get("reps"):
-                                _bdist = _b.get("distance_km","")
-                                _bdist_str = f"{float(_bdist)*1000:.0f}m" if _bdist and float(_bdist)<1 else (f"{float(_bdist):.1f}km" if _bdist else "")
-                                _bline = f"<span style='color:{_bc2}'>{'&nbsp;'*4}{_bico2} **{_b['reps']}×{_bdist_str}** {_bi}"
-                                if _rest: _bline += f" <span style='color:#aaa'>rec {_rest}</span>"
-                                _bline += "</span>"
-                            elif _b.get("distance_km"):
-                                _bdist = float(_b["distance_km"])
-                                _bdist_str = f"{_bdist*1000:.0f}m" if _bdist < 1 else f"{_bdist:.1f}km"
-                                _bline = f"<span style='color:{_bc2}'>{'&nbsp;'*4}{_bico2} **{_bdist_str}** {_bi}"
-                                if _note and _note not in ("None","nan",""): _bline += f" <span style='color:#aaa'>— {_note}</span>"
-                                _bline += "</span>"
-                            elif _note:
-                                _bline = f"<span style='color:#aaa'>{'&nbsp;'*4}▸ {_note}</span>"
-                            else:
-                                continue
-                            st.markdown(_bline, unsafe_allow_html=True)
-                st.markdown("<hr style='margin:8px 0;border-color:#333'>", unsafe_allow_html=True)
-
-    # ── GERENCIAR PLANO ────────────────────────────────────────────────────────
-    with st.expander("🗑️ Gerenciar plano (remover treinos)"):
-        if plan_data:
-            _del_opts = {
-                f"{s.get('date','')} — {s.get('training_type','?' )} {s.get('distance_km','?' )}km": i
-                for i, s in enumerate(plan_data)
-            }
-            _to_del = st.multiselect("Selecione para remover:", list(_del_opts.keys()), key="plan_del_select")
-            if _to_del and st.button("🗑️ Remover selecionados", key="plan_del_btn"):
-                _idxs = sorted({_del_opts[k] for k in _to_del}, reverse=True)
-                for _i in _idxs:
-                    plan_data.pop(_i)
-                _save_plan(plan_data)
-                st.success("Removido(s).")
-                st.rerun()
-        else:
-            st.caption("Plano vazio.")
-
-    st.markdown("---")
-    if GROQ_KEY and len(GROQ_KEY) >= 20:
-        _upcoming = [
-            f"{s.get('date')} {s.get('training_type')} {s.get('distance_km')}km"
-            for s in plan_future.head(5).to_dict('records')
-        ] if not plan_future.empty else []
-        _ctx_plano = (
-            f"Plano de treino atual: {len(plan_data)} treinos cadastrados. "
-            f"Proximos: {_upcoming}."
-        )
-        _groq_widget("Plano", _ctx_plano, "plano")
+   
