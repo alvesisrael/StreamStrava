@@ -109,5 +109,70 @@
     "description": "Aqueecimento articular + alguns exercícios de deslocamento e coordenação/técnica: FAZER PELO MENOS 2 EXERCÍCIOS DE COORDENAÇÃO E TÉCNICA.",
     "blocks": [],
     "training_load": 40.24
+  },
+  {
+    "date": "2026-07-21",
+    "title": "TESTE DE 3km",
+    "training_type": "Corrida",
+    "course": "Plano",
+    "distance_km": 8.0,
+    "elevation_gain": null,
+    "intensity": "Muito Forte",
+    "description": "TESTE DE 3km\n\nDescrição: Aquecimento articular + alguns exercícios de deslocamento e coordenação/técnica:\n\nFAZER PELO MENOS 2 EXERCÍCIOS DE COORDENAÇÃO E TÉCNICA.\n\nAQUECIMENTO:\n*1km muito leve\n*1km moderado\n*intervalo 4:00min\n\nSÉRIE PRINCIPAL: se não souber cadastrar/programar os treinos intervalados para me mostrar o treino separado em etapas, por favor, marque e salva este teste de 3km separado do aquecimento para que eu possa avaliar melhor somete ele e o ritmo médio.\n\nTESTE DE 3KM - fazer 3km e ritmo bem forte estilo prova, cuidado pra não \"queimar a largada\" e tentar ritmo médio que aguent, terminar forteeeee (obs.: não pode parar e pausar o relógio durante o teste). Concluindo me enviar, que irei te enviar a tua tabela de ritmos para trabalhar os próximos treinos.\n\n*intervalo de 2:30min\n*3km leve",
+    "blocks": [
+      {
+        "distance_km": 1.0,
+        "intensity": "Muito Leve",
+        "note": "aquecimento"
+      },
+      {
+        "distance_km": 1.0,
+        "intensity": "Moderado",
+        "note": "aquecimento"
+      },
+      {
+        "distance_km": 3.0,
+        "intensity": "Muito Forte",
+        "rest": "2:30min",
+        "note": "teste"
+      }
+    ],
+    "training_load": 29.58
+  },
+  {
+    "date": "2026-07-23",
+    "title": "Corrida",
+    "training_type": "Corrida",
+    "course": "Trilhas com boa altimetria ()",
+    "distance_km": 12.0,
+    "elevation_gain": "300-400m D+",
+    "intensity": "Moderado",
+    "description": "Foco nas subidas\nDescrição: Aquecimento articular + alguns exercícios de deslocamento e coordenação/técnica:\n\nTerreno variado com morros/trilhas se consegui, com 300-400m D+ (altimetria) - COM CARGA 1 a 2kg extra na mochila",
+    "blocks": [],
+    "training_load": 40.24
+  },
+  {
+    "date": "2026-07-25",
+    "title": "TREINO 1",
+    "training_type": "Longo",
+    "course": "Trilhas com boa altimetria ()",
+    "distance_km": 17.0,
+    "elevation_gain": "500-600m D+",
+    "intensity": "Moderado",
+    "description": "Ritmo constante e equilibrado nas subidas e descidas!\nDescrição: Aquecimento articular + alguns exercícios de deslocamento e coordenação/técnica:\n\nTerreno variado - bora buscar trilhas/mato/estrada e variar o máximo que conseguir.",
+    "blocks": [],
+    "training_load": 57.0
+  },
+  {
+    "date": "2026-07-27",
+    "title": "Corrid",
+    "training_type": "Regenerativo",
+    "course": "Subidas e descidas com pouca a ()",
+    "distance_km": 10.0,
+    "elevation_gain": "100-150m D+",
+    "intensity": "Trote/Regenerativo",
+    "description": "AqueCimento articular + alguns exercÍcios de deslocamento e coordenação/técnica:\n\nFAZER PELO MENOS 2 EXERCÍCIOS DE COORDENAÇÃO E TÉCNICA.",
+    "blocks": [],
+    "training_load": 33.53
   }
 ]
