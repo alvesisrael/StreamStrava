@@ -4117,9 +4117,43 @@ with tab_plano:
         hr_abs  = hr_pct * 195
         return round(dur_min * (hr_abs - 45) / (195 - 45), 2)
 
-    # ── Load / save plan (DB-first, JSON fallback) ───────────────────────────
+    # ── GitHub persistence (survives Streamlit Cloud restarts) ──────────────────
+    _GH_TOKEN    = (st.secrets.get("GITHUB_TOKEN", "") if hasattr(st, "secrets") else "") or _os.environ.get("GITHUB_TOKEN", "")
+    _GH_REPO     = (st.secrets.get("GITHUB_REPO",  "") if hasattr(st, "secrets") else "") or "alvesisrael/StreamStrava"
+    _GH_BRANCH   = (st.secrets.get("GITHUB_BRANCH","") if hasattr(st, "secrets") else "") or "main"
+    _GH_PLAN_PATH = "data/processed/training_plan.json"
+
+    def _push_plan_to_github(plan: list) -> tuple:
+        """Commit training_plan.json to GitHub so data persists across Streamlit Cloud restarts."""
+        if not _GH_TOKEN:
+            return False, "sem token"
+        try:
+            import requests as _req, base64 as _b64
+            _url  = f"https://api.github.com/repos/{_GH_REPO}/contents/{_GH_PLAN_PATH}"
+            _hdrs = {"Authorization": f"token {_GH_TOKEN}",
+                     "Accept": "application/vnd.github.v3+json"}
+            _r    = _req.get(_url, headers=_hdrs, params={"ref": _GH_BRANCH}, timeout=10)
+            _sha  = _r.json().get("sha") if _r.status_code == 200 else None
+            _cont = _b64.b64encode(
+                _json.dumps(plan, ensure_ascii=False, indent=2).encode("utf-8")
+            ).decode()
+            _payload = {
+                "message": f"chore: plano de treino atualizado ({len(plan)} treinos)",
+                "content": _cont,
+                "branch":  _GH_BRANCH,
+            }
+            if _sha:
+                _payload["sha"] = _sha
+            _r2 = _req.put(_url, json=_payload, headers=_hdrs, timeout=15)
+            if _r2.status_code in (200, 201):
+                return True, "ok"
+            return False, f"HTTP {_r2.status_code}: {_r2.json().get('message','')}"
+        except Exception as _ge:
+            return False, str(_ge)
+
+    # ── Load / save plan (SQLite → JSON → GitHub) ────────────────────────────────
     def _load_plan() -> list:
-        # Prefer SQLite
+        # 1. SQLite (fast, local)
         if _HAS_DB:
             try:
                 _plan_db = _db_get_plan()
@@ -4127,7 +4161,7 @@ with tab_plano:
                     return _plan_db
             except Exception:
                 pass
-        # Fallback: JSON file
+        # 2. JSON file committed to repo via GitHub API
         if _os.path.exists(PLAN_FILE):
             try:
                 with open(PLAN_FILE) as _f:
@@ -4137,7 +4171,7 @@ with tab_plano:
         return []
 
     def _save_plan(plan: list):
-        # Write to DB — clear first so deleted entries are actually removed
+        # 1. SQLite — clear first so deletes actually remove rows
         if _HAS_DB:
             try:
                 import sqlite3 as _sl3
@@ -4145,13 +4179,20 @@ with tab_plano:
                 with _sl3_conn:
                     _sl3_conn.execute("DELETE FROM training_plan")
                 _sl3_conn.close()
-                _db_save_plan(plan)  # re-insert remaining
+                _db_save_plan(plan)
             except Exception as _se:
                 st.toast(f"⚠️ DB save: {_se}", icon="⚠️")
-        # Also keep JSON file as backup
+        # 2. Local JSON backup
         _os.makedirs(_os.path.dirname(PLAN_FILE), exist_ok=True)
         with open(PLAN_FILE, "w") as _f:
             _json.dump(plan, _f, ensure_ascii=False, indent=2)
+        # 3. GitHub API — persist across Streamlit Cloud restarts
+        _ok, _msg = _push_plan_to_github(plan)
+        if _ok:
+            st.toast("☁️ Plano salvo no GitHub!", icon="✅")
+        elif _GH_TOKEN:
+            st.toast(f"⚠️ GitHub sync falhou: {_msg}", icon="⚠️")
+        # (silently skip if no token configured)
 
     # ── Groq vision extraction ────────────────────────────────────────────────
     def _extract_from_screenshot(img_bytes: bytes, api_key: str) -> dict | None:
