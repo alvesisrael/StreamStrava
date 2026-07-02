@@ -1,0 +1,113 @@
+[
+  {
+    "date": "2026-07-09",
+    "title": "TREINO 1",
+    "training_type": "Corrida",
+    "course": "Plano",
+    "distance_km": 12.0,
+    "elevation_gain": null,
+    "intensity": "Trote/Regenerativo",
+    "description": "Aquecimento articular + alguns exercícios de deslocamento e coordenação/técnica: FAZER PELO MENOS 2 EXERCÍCIOS DE COORDENAÇÃO E TÉCNICA.",
+    "blocks": [],
+    "training_load": 40.24
+  },
+  {
+    "date": "2026-07-13",
+    "title": "TREINO 1",
+    "training_type": "Corrida",
+    "course": "Subidas e descidas com pouca a ()",
+    "distance_km": 12.0,
+    "elevation_gain": "100-150m D+",
+    "intensity": "Trote/Regenerativo",
+    "description": "Aquecimento articular + alguns exercícios de deslocamento e coordenação/técnica: FAZER PELO MENOS 2 EXERCÍCIOS DE COORDENAÇÃO E TÉCNICA.",
+    "blocks": [],
+    "training_load": 40.24
+  },
+  {
+    "date": "2026-07-14",
+    "title": "Corrida",
+    "training_type": "Intervalado",
+    "course": "Plano",
+    "distance_km": 10.0,
+    "elevation_gain": null,
+    "intensity": "Muito Forte",
+    "description": "Aquecimento articular + alguns exercícios de deslocamento e coordenação/técnica:\n\nAQUECIMENTO:\n*2km Muito leve\n*1km Moderado\n*intervalo 2:00min\n\nSÉRIE PRINCIPAL:\n*25 x 200m Muito Forte plano c/ 0:45seg intervalo\n\nSOLTURA:\n*2km Trote leve",
+    "blocks": [
+      {
+        "distance_km": 2.0,
+        "intensity": "Muito Leve",
+        "note": "aquecimento"
+      },
+      {
+        "distance_km": 1.0,
+        "intensity": "Moderado",
+        "note": "aquecimento"
+      },
+      {
+        "reps": 25,
+        "distance_km": 0.2,
+        "intensity": "Muito Forte",
+        "rest": "0:45seg"
+      },
+      {
+        "distance_km": 2.0,
+        "intensity": "Trote leve",
+        "note": "soltura"
+      }
+    ],
+    "training_load": 36.98
+  },
+  {
+    "date": "2026-07-16",
+    "title": "TREINO 1 - Corrida - Foco nas subidas",
+    "training_type": "Corrida",
+    "course": "Trilhas com boa altimetria ()",
+    "distance_km": 12.0,
+    "elevation_gain": "300-400m D+",
+    "intensity": "Moderado",
+    "description": "Aquecimento articular + alguns exercícios de deslocamento e coordenação/técnica: \n\nTerreno variado com morros/trilhas se conseguir, com 300-400m D+ (altimetria) - COM CARGA 1 a 2kg extra na mochila",
+    "blocks": [],
+    "training_load": 40.24
+  },
+  {
+    "date": "2026-07-18",
+    "title": "LONGO TRAIL FARTLEK",
+    "training_type": "Longo",
+    "course": "Trilhas com boa altimetria ()",
+    "distance_km": 18.0,
+    "elevation_gain": "700-900m D+",
+    "intensity": "Moderado",
+    "description": "Aquecimento articular + alguns exercícios de deslocamento e coordenação/técnica:\nRepetir a série abaixo 3x: independente se estiver plano/subida/descida/trilha\n*2km Muito leve\n*2km Moderado\n*1km Muito leve\n*1km Firme/Forte",
+    "blocks": [
+      {
+        "distance_km": 2.0,
+        "intensity": "Muito Leve"
+      },
+      {
+        "distance_km": 2.0,
+        "intensity": "Moderado"
+      },
+      {
+        "distance_km": 1.0,
+        "intensity": "Muito Leve"
+      },
+      {
+        "distance_km": 1.0,
+        "intensity": "Firme/Forte"
+      }
+    ],
+    "training_load": 60.36
+  },
+  {
+    "date": "2026-07-20",
+    "title": "TREINO 1",
+    "training_type": "Regenerativo",
+    "course": "Subidas e descidas com pouca a ()",
+    "distance_km": 12.0,
+    "elevation_gain": "100-150m D+",
+    "intensity": "Trote/Regenerativo",
+    "description": "Aqueecimento articular + alguns exercícios de deslocamento e coordenação/técnica: FAZER PELO MENOS 2 EXERCÍCIOS DE COORDENAÇÃO E TÉCNICA.",
+    "blocks": [],
+    "training_load": 40.24
+  }
+]
