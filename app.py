@@ -1024,7 +1024,8 @@ with tab_hoje:
     km_7d = float(ult7d["distance_km"].sum())
 
     # ── HERO: Última atividade | Próximo treino | Garmin quick ─────────────────
-    _h1, _h2, _h3 = st.columns(3)
+    st.markdown("<style>.hero-row [data-testid='stVerticalBlock']{height:100%}</style>", unsafe_allow_html=True)
+    _h1, _h2, _h3 = st.columns([1, 1, 1])
 
     # Card 1 — Última atividade
     with _h1:
@@ -1062,15 +1063,25 @@ with tab_hoje:
     # Card 2 — Próximo treino planejado
     with _h2:
         _plan_next = None
+        _today_h = pd.Timestamp.now().normalize().strftime("%Y-%m-%d")
         try:
-            import json as _jh, os as _oh
-            _pf = _oh.path.join(BASE, "training_plan.json")
-            if _oh.path.exists(_pf):
-                with open(_pf) as _pff:
-                    _plan_raw_h = _jh.load(_pff)
-                _today_h = pd.Timestamp.now().strftime("%Y-%m-%d")
-                _future_h = sorted([p for p in _plan_raw_h if p.get("date","") >= _today_h],
-                                    key=lambda x: x.get("date",""))
+            # Prefer DB (always up-to-date)
+            if _HAS_DB:
+                _plan_raw_h = _db_get_plan()
+            else:
+                _plan_raw_h = []
+            # Fallback to JSON
+            if not _plan_raw_h:
+                import json as _jh, os as _oh
+                _pf = _oh.path.join(BASE, "training_plan.json")
+                if _oh.path.exists(_pf):
+                    with open(_pf) as _pff:
+                        _plan_raw_h = _jh.load(_pff)
+            if _plan_raw_h:
+                _future_h = sorted(
+                    [p for p in _plan_raw_h if str(p.get("date","")) >= _today_h],
+                    key=lambda x: str(x.get("date",""))
+                )
                 _plan_next = _future_h[0] if _future_h else None
         except Exception:
             pass
@@ -1404,117 +1415,6 @@ with tab_hoje:
             ["Data", "Nome", "Dist(km)", "Pace", "FC(bpm)", "Elev"],
             max_rows=30)
     )
-
-    # ══════════════════════════════════════════════════════════════════════════
-    #  🏅 GARMIN INSIGHTS — dados exclusivos do relógio
-    # ══════════════════════════════════════════════════════════════════════════
-    st.markdown("---")
-    st.subheader("🏅 Garmin Insights")
-
-    @st.cache_data(ttl=3600, show_spinner=False)
-    def _load_garmin_insights():
-        import json, os
-        p = os.path.join(BASE, "garmin_insights.json")
-        if not os.path.exists(p):
-            return None
-        with open(p) as f:
-            return json.load(f)
-
-    _gi = _load_garmin_insights()
-
-    if _gi:
-        _upd = _gi.get("updated_at", "")
-        st.caption(f"Dados Garmin Connect · atualizado em {_upd} · rode `python sync.py` para atualizar")
-
-        # ── Race Predictions ──────────────────────────────────────────────────
-        st.markdown("**🎯 Previsões de Prova** *(baseado no VO₂max e treinos recentes)*")
-        rp = _gi.get("race_predictions", {})
-        _rp_cols = st.columns(4)
-        for _col, (_dist, _label, _emoji) in zip(_rp_cols, [
-            ("5K",            "5 km",       "⚡"),
-            ("10K",           "10 km",      "🏃"),
-            ("half_marathon", "Meia Marat.", "🏅"),
-            ("marathon",      "Maratona",   "🏆"),
-        ]):
-            _pred = rp.get(_dist, {})
-            _t    = _pred.get("time", "—")
-            _pace_s = _pred.get("time_seconds", 0)
-            # Compute pace (sec/km) for context
-            _dist_km = {"5K": 5, "10K": 10, "half_marathon": 21.0975, "marathon": 42.195}[_dist]
-            _pace_fmt = fmt_pace(_pace_s / _dist_km) if _pace_s else "—"
-            _col.metric(f"{_emoji} {_label}", _t, f"⌛ {_pace_fmt}/km", delta_color="off")
-
-        st.markdown("")
-
-        # ── VO2max + RHR ──────────────────────────────────────────────────────
-        _v2_col, _rhr_col, _bb_col = st.columns([1, 1, 2])
-
-        with _v2_col:
-            _vo2 = _gi.get("vo2max", {})
-            _vo2_cur  = _vo2.get("current", None)
-            _vo2_chg  = _vo2.get("change", 0)
-            _vo2_delta = f"+{_vo2_chg:.1f}" if _vo2_chg >= 0 else f"{_vo2_chg:.1f}"
-            if _vo2_cur:
-                # VO2max fitness category
-                if   _vo2_cur >= 60: _vo2_cat = "Elite"
-                elif _vo2_cur >= 55: _vo2_cat = "Superior"
-                elif _vo2_cur >= 49: _vo2_cat = "Excelente"
-                elif _vo2_cur >= 43: _vo2_cat = "Bom"
-                else:                _vo2_cat = "Médio"
-                st.metric("🫁 VO₂max", f"{_vo2_cur:.0f} ml/kg/min",
-                          f"{_vo2_delta} · {_vo2_cat}", delta_color="normal")
-            else:
-                st.metric("🫁 VO₂max", "—")
-
-        with _rhr_col:
-            _rhr = _gi.get("rhr_today")
-            if _rhr:
-                if   _rhr <= 45: _rhr_cat = "Atleta"
-                elif _rhr <= 52: _rhr_cat = "Excelente"
-                elif _rhr <= 59: _rhr_cat = "Bom"
-                else:            _rhr_cat = "Normal"
-                st.metric("❤️ FC Repouso", f"{_rhr} bpm", _rhr_cat, delta_color="off")
-            else:
-                st.metric("❤️ FC Repouso", "—")
-
-        # ── Body Battery 30d ─────────────────────────────────────────────────
-        with _bb_col:
-            _bb_data = _gi.get("body_battery", [])
-            if _bb_data:
-                _bb_df = pd.DataFrame(_bb_data)
-                _bb_df["date"] = pd.to_datetime(_bb_df["date"])
-                _bb_df = _bb_df.tail(14)  # last 14 days
-
-                # Saldo líquido: verde se carregou mais do que gastou, vermelho se não
-                _bb_df["saldo"] = _bb_df["charged"].fillna(0) - _bb_df["drained"].fillna(0)
-                _bb_colors = [GREEN if v >= 0 else RED for v in _bb_df["saldo"]]
-
-                _fig_bb = go.Figure()
-                _bb_df["hover"] = _bb_df.apply(
-                    lambda r: f"Carregado: {int(r.get('charged',0) or 0)}<br>Gasto: {int(r.get('drained',0) or 0)}<br>Saldo: {int(r['saldo'])}",
-                    axis=1
-                )
-                _fig_bb.add_bar(
-                    x=_bb_df["date"].dt.strftime("%d/%m"),
-                    y=_bb_df["saldo"],
-                    marker_color=_bb_colors,
-                    text=_bb_df["saldo"].apply(lambda v: f"+{int(v)}" if v >= 0 else str(int(v))),
-                    textposition="outside",
-                    customdata=_bb_df["hover"],
-                    hovertemplate="<b>%{x}</b><br>%{customdata}<extra></extra>",
-                    showlegend=False,
-                )
-                _fig_bb.add_hline(y=0, line_color="gray", line_width=1)
-                _fig_bb.update_layout(
-                    title="🔋 Body Battery — saldo diário (carregado − gasto)",
-                    height=230,
-                    margin=dict(t=40, b=10, l=0, r=0),
-                    yaxis=dict(title="", zeroline=False),
-                )
-                st.plotly_chart(_fig_bb, use_container_width=True)
-    else:
-        st.info("📡 Dados Garmin não encontrados. Rode `python sync.py` localmente para gerar `garmin_insights.json`.")
-
 
     _groq_widget("Dashboard", _ctx_dash, "dash")
 
