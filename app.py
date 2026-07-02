@@ -4599,8 +4599,25 @@ Se não conseguir extrair algum campo, use null."""
     _d3.metric("📐 D+ total",          f"{_total_dplus:.0f} m" if _total_dplus else "—",
                f"~{_avg_dplus_week:.0f} m/sem" if _total_dplus else None)
     _d4.metric("🗓️ Semanas",          str(_n_weeks_plan))
-    _d5.metric("🎯 Distribuição",      f"{_pct_easy}% leve · {_pct_hard}% forte",
-               help="Regra 80/20: ideal ≈ 80% leve, 20% forte.")
+    with _d5:
+        _pct_mod = 100 - _pct_easy - _pct_hard
+        _dist_tip = "Regra 80/20: ideal ≈ 80% leve, 20% forte"
+        st.markdown(
+            "<p style='font-size:0.75rem;color:#aaa;margin:0 0 4px'>🎯 Distribuição</p>"
+            f"<div style='width:100%;height:16px;border-radius:8px;overflow:hidden;"
+            f"display:flex;gap:1px;margin-bottom:4px'>"
+            f"<div style='width:{_pct_easy}%;background:#27AE60' title='Leve {_pct_easy}%'></div>"
+            f"<div style='width:{_pct_mod}%;background:#F1C40F' title='Moderado {_pct_mod}%'></div>"
+            f"<div style='width:{_pct_hard}%;background:#E74C3C' title='Forte {_pct_hard}%'></div>"
+            f"</div>"
+            f"<p style='font-size:0.72rem;color:#ccc;margin:0'>"
+            f"🟢 {_pct_easy}% &nbsp;🟡 {_pct_mod}% &nbsp;🔴 {_pct_hard}%</p>",
+            unsafe_allow_html=True
+        )
+        if _pct_easy >= 70:
+            st.markdown("<p style='font-size:0.68rem;color:#27AE60;margin:2px 0'>✅ 80/20 ok</p>", unsafe_allow_html=True)
+        elif _pct_hard > 30:
+            st.markdown("<p style='font-size:0.68rem;color:#E74C3C;margin:2px 0'>⚠️ muito intenso</p>", unsafe_allow_html=True)
 
     st.markdown("---")
 
@@ -4801,33 +4818,95 @@ Se não conseguir extrair algum campo, use null."""
         "Linha verde = D+ acumulado · Linha pontilhada = meta média semanal"
     )
 
-    # ── Distribuição de intensidade ───────────────────────────────────────
+
+    # ── Distribuição de intensidade ───────────────────────────────────────────────
     if not _int_counts.empty:
         st.markdown("#### 🎯 Distribuição de intensidade no plano")
-        _ic1, _ic2 = st.columns([2, 1])
         _int_colors = {
             "Muito Leve":"#27AE60","Leve":"#2ECC71","Trote":"#1ABC9C",
             "Trote/Regenerativo":"#1ABC9C","Regenerativo":"#1ABC9C",
             "Moderado":"#F1C40F","Moderado Firme":"#E67E22","Moderado-firme":"#E67E22",
             "Forte":"#E74C3C","Muito Forte":"#922B21",
         }
-        _bar_colors = [_int_colors.get(l,"#7F8C8D") for l in _int_counts.index]
-        _fig_int = go.Figure(go.Bar(
-            x=_int_counts.index, y=_int_counts.values,
-            marker_color=_bar_colors, text=_int_counts.values, textposition="auto"
-        ))
-        _fig_int.update_layout(height=220, margin=dict(t=10,b=10,l=0,r=0),
-                                xaxis=dict(showgrid=False), yaxis=dict(showgrid=False))
-        _ic1.plotly_chart(_fig_int, use_container_width=True)
+        _ic1, _ic2, _ic3 = st.columns([1.4, 1.4, 1])
+
+        # ── Donut: número de treinos por intensidade ──────────────────────────
+        with _ic1:
+            _donut_colors = [_int_colors.get(l,"#7F8C8D") for l in _int_counts.index]
+            _fig_donut = go.Figure(go.Pie(
+                labels=_int_counts.index,
+                values=_int_counts.values,
+                hole=0.55,
+                marker_colors=_donut_colors,
+                textinfo="percent",
+                textfont_size=11,
+                hovertemplate="<b>%{label}</b><br>%{value} treinos (%{percent})<extra></extra>",
+            ))
+            _fig_donut.update_layout(
+                height=220, margin=dict(t=5,b=5,l=0,r=0),
+                showlegend=False,
+                annotations=[dict(text=f"<b>{len(plan_df)}</b><br><span style='font-size:10px'>treinos</span>",
+                                  x=0.5, y=0.5, font_size=14, showarrow=False)]
+            )
+            st.plotly_chart(_fig_donut, use_container_width=True)
+
+        # ── Barras horizontais: km por intensidade ────────────────────────────
         with _ic2:
-            st.metric("😌 Leve/Regenerativo", f"{_pct_easy}%")
-            st.metric("💪 Forte/Muito Forte",  f"{_pct_hard}%")
-            _pc_mod = 100 - _pct_easy - _pct_hard
-            st.metric("🔄 Moderado",           f"{_pc_mod}%")
+            if "intensity" in plan_df.columns and "distance_km" in plan_df.columns:
+                _km_int = plan_df.groupby("intensity")["distance_km"].sum().sort_values(ascending=True)
+                _km_colors = [_int_colors.get(l,"#7F8C8D") for l in _km_int.index]
+                _fig_km = go.Figure(go.Bar(
+                    x=_km_int.values, y=_km_int.index,
+                    orientation="h",
+                    marker_color=_km_colors,
+                    text=[f"{v:.0f} km" for v in _km_int.values],
+                    textposition="inside",
+                    textfont=dict(size=10, color="white"),
+                    hovertemplate="<b>%{y}</b>: %{x:.1f} km<extra></extra>",
+                ))
+                _fig_km.update_layout(
+                    height=220, margin=dict(t=5,b=5,l=0,r=5),
+                    xaxis=dict(showgrid=False, showticklabels=False),
+                    yaxis=dict(showgrid=False),
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    paper_bgcolor="rgba(0,0,0,0)",
+                )
+                st.plotly_chart(_fig_km, use_container_width=True)
+
+        # ── Painel 80/20 ──────────────────────────────────────────────────────
+        with _ic3:
+            _pct_mod2 = 100 - _pct_easy - _pct_hard
+            st.markdown("<br>", unsafe_allow_html=True)
+            # Stacked horizontal bar
+            st.markdown(
+                f"<p style='font-size:0.78rem;color:#aaa;margin:0 0 6px'>Zonas de treino</p>"
+                f"<div style='width:100%;height:20px;border-radius:10px;overflow:hidden;display:flex'>"
+                f"<div style='width:{_pct_easy}%;background:#27AE60' title='Leve'></div>"
+                f"<div style='width:{_pct_mod2}%;background:#F1C40F' title='Moderado'></div>"
+                f"<div style='width:{_pct_hard}%;background:#E74C3C' title='Forte'></div>"
+                f"</div>",
+                unsafe_allow_html=True
+            )
+            st.markdown("<br>", unsafe_allow_html=True)
+            for _lbl, _pct, _clr in [
+                ("🟢 Leve", _pct_easy, "#27AE60"),
+                ("🟡 Moderado", _pct_mod2, "#F1C40F"),
+                ("🔴 Forte", _pct_hard, "#E74C3C"),
+            ]:
+                st.markdown(
+                    f"<div style='display:flex;justify-content:space-between;margin:3px 0'>"
+                    f"<span style='font-size:0.8rem'>{_lbl}</span>"
+                    f"<span style='font-size:0.8rem;font-weight:bold;color:{_clr}'>{_pct}%</span>"
+                    f"</div>",
+                    unsafe_allow_html=True
+                )
+            st.markdown("<br>", unsafe_allow_html=True)
             if _pct_easy >= 70:
-                st.success("✅ Boa base aeróbica (regra 80/20)")
+                st.success("✅ 80/20 ok")
             elif _pct_hard > 30:
-                st.warning("⚠️ Plano muito intenso — risco de overtraining")
+                st.warning("⚠️ Intenso")
+            else:
+                st.info("📊 Balanceado")
 
     st.markdown("---")
 
