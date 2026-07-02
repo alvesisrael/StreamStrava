@@ -1,5 +1,17 @@
 [
   {
+    "date": "2026-07-04",
+    "title": "Foco nas subidas",
+    "training_type": "Corrida",
+    "course": "Trilhas com boa altimetria ()",
+    "distance_km": 25.0,
+    "elevation_gain": "900-1.300m D+",
+    "intensity": "Moderado",
+    "description": "Aquecimento articular + alguns exercícios de deslocamento e coordenação/técnica: Terreno variado - bora buscar trilhas/mato/estrada e variar o máximo que conseguir, foco do treino nas subidas, tentar trotar máximo que conseguir e ou fazer mais força no trekking de subida. Obs.: quem usa bastão tá liberado treinar técnica com ele e fortalecer os braços com ele (mas lembrando - o bastão vem para Auxiliar, não joguem a força só nele e nem viciem em jogar sempre pra ele, as pernas precisam fazer uma forcinha também)",
+    "blocks": [],
+    "training_load": 83.83
+  },
+  {
     "date": "2026-07-09",
     "title": "TREINO 1",
     "training_type": "Corrida",
@@ -174,5 +186,41 @@
     "description": "AqueCimento articular + alguns exercÍcios de deslocamento e coordenação/técnica:\n\nFAZER PELO MENOS 2 EXERCÍCIOS DE COORDENAÇÃO E TÉCNICA.",
     "blocks": [],
     "training_load": 33.53
+  },
+  {
+    "date": "2026-07-28",
+    "title": "Corrida",
+    "training_type": "Treino de Ritmo",
+    "course": "Plano",
+    "distance_km": 10.0,
+    "elevation_gain": null,
+    "intensity": "Moderado-firme",
+    "description": "Aquecimento articular + alguns exercícios de deslocamento e coordenação/técnica:\n\nFAZER PELO MENOS 2 EXERCÍCIOS DE COORDENAÇÃO E TÉCNICA.\n\n*2km Muito Leve\n*2km Moderado\n*1km Muito Leve\n*2km Moderado-firme\n*1km Muito Leve\n*1km Forte a Muito Forte\n*1km Muito Leve",
+    "blocks": [],
+    "training_load": 35.74
+  },
+  {
+    "date": "2026-07-30",
+    "title": "TREINO 1",
+    "training_type": "Regenerativo",
+    "course": "Plano",
+    "distance_km": 5.0,
+    "elevation_gain": null,
+    "intensity": "Trote/Regenerativo",
+    "description": "Aquecimento articular + alguns exercícios de deslocamento e coordenação/técnica: FAZER PELO MENOS 2 EXERCÍCIOS DE COORDENAÇÃO E TÉCNICA.",
+    "blocks": [],
+    "training_load": 16.77
+  },
+  {
+    "date": "2026-08-01",
+    "title": "TREINO 1",
+    "training_type": "Competição",
+    "course": "Trilhas com boa altimetria ()",
+    "distance_km": 21.1,
+    "elevation_gain": null,
+    "intensity": "Forte",
+    "description": "Paulo Lopes trail run\n\nDescrição: Aquecimento articular + alguns exercícios de deslocamento e coordenação/técnica:\n\nBoraaa para mais um desafio negoo!! Certeza que será uma baita estreia.. o segredo é não se empolgar e não se desesperar na largada, vai sentindo corpo e a perna! BOA PROVAAA",
+    "blocks": [],
+    "training_load": 77.99
   }
 ]
