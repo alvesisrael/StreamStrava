@@ -12,6 +12,18 @@
     "training_load": 83.83
   },
   {
+    "date": "2026-07-07",
+    "title": "Foco nas descidas",
+    "training_type": "Força",
+    "course": "Estradão",
+    "distance_km": 11.0,
+    "elevation_gain": "430",
+    "intensity": "Muito Forte",
+    "description": "Aquece 2km\nDesce 5km \nDesaquece 1km",
+    "blocks": [],
+    "training_load": 40.67
+  },
+  {
     "date": "2026-07-09",
     "title": "TREINO 1",
     "training_type": "Corrida",
