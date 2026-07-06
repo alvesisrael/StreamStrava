@@ -5034,4 +5034,109 @@ Se não conseguir extrair algum campo, use null."""
                 _elev      = _wo.get("_elev_m",0) or 0
                 _title     = str(_wo.get("title","") or "")
                 _desc      = str(_wo.get("description","") or "")
-   
+                # ── card do treino ─────────────────────────────────────────────
+                _color     = _INT_COLOR_PLAN.get(_intens, "#4A90D9")
+                _int_icon  = _INT_ICON.get(_intens,  "🔵")
+                _type_icon = _TYPE_ICON.get(_wtype,  "🏃")
+                try:
+                    _dist_val = float(_dist) if _dist and str(_dist) not in ("None","nan") else 0
+                except Exception:
+                    _dist_val = 0
+                _dist_str  = f"{_dist_val:.1f} km" if _dist_val else "—"
+                _elev_f    = float(_elev) if _elev else 0
+                _elev_str  = f" · ⛰️ {_elev_f:.0f}m D+" if _elev_f > 0 else ""
+                _desc_safe = _desc if _desc and _desc not in ("nan","None","") else ""
+                _title_lbl = _title if _title and _title not in ("nan","None","") else _wtype
+                _card_html = (
+                    f"<div style=\"border-left:4px solid {_color};padding:8px 14px;"
+                    f"margin:6px 0 4px 0;border-radius:0 6px 6px 0;"
+                    f"background:rgba(255,255,255,0.03)\">"
+                    f"<div style=\"font-weight:600;font-size:0.95rem\">"
+                    f"{_type_icon} <span style=\"color:#ddd\">{_dt_label}</span>"
+                    f" — {_title_lbl}</div>"
+                    f"<div style=\"font-size:0.82rem;color:#aaa;margin-top:3px\">"
+                    f"{_int_icon} {_intens or '—'} &nbsp;·&nbsp; 📏 {_dist_str}{_elev_str}</div>"
+                )
+                if _desc_safe:
+                    _desc_trunc = _desc_safe[:280] + ("…" if len(_desc_safe) > 280 else "")
+                    _card_html += (
+                        f"<div style=\"font-size:0.80rem;color:#888;margin-top:5px;"
+                        f"white-space:pre-wrap\">{_desc_trunc}</div>"
+                    )
+                _card_html += "</div>"
+                st.markdown(_card_html, unsafe_allow_html=True)
+
+                # blocos de intervalos
+                _blks = _wo.get("blocks") or []
+                if isinstance(_blks, list) and _blks:
+                    with st.expander("📋 Blocos de treino", expanded=False):
+                        for _b in _blks:
+                            _bint   = str(_b.get("intensity","") or "")
+                            _bdist  = _b.get("distance_km") or _b.get("distance","")
+                            _breps  = _b.get("reps","")
+                            _bnote  = str(_b.get("note","") or "")
+                            _brest  = str(_b.get("rest","") or "")
+                            _bcolor = _INT_COLOR_PLAN.get(_bint, "#666")
+                            _parts  = []
+                            if _breps: _parts.append(f"{_breps}×")
+                            if _bdist: _parts.append(f"{_bdist} km")
+                            if _bint:  _parts.append(_bint)
+                            if _bnote: _parts.append(_bnote)
+                            if _brest: _parts.append(f"descanso: {_brest}")
+                            _b_html = (
+                                f"<div style=\"border-left:3px solid {_bcolor};"
+                                f"padding:3px 10px;margin:2px 0;"
+                                f"font-size:0.80rem;color:#bbb\">"
+                                f"{' · '.join(_parts)}</div>"
+                            )
+                            st.markdown(_b_html, unsafe_allow_html=True)
+
+    # ── Gerenciar / excluir treinos ───────────────────────────────────────────
+    st.markdown("---")
+    with st.expander("🗑️ Gerenciar / Excluir treinos", expanded=False):
+        if not plan_data:
+            st.info("Nenhum treino cadastrado.")
+        else:
+            _del_labels = [
+                f"{p.get('date','')} — {p.get('title','') or p.get('training_type','')} "
+                f"({p.get('distance_km','')} km)"
+                for p in plan_data
+            ]
+            _del_sel = st.multiselect(
+                "Selecione treinos para excluir:",
+                options=_del_labels,
+                key="del_plan_sel",
+            )
+            if st.button(
+                "🗑️ Excluir selecionados",
+                type="primary",
+                key="del_plan_btn",
+                disabled=not bool(_del_sel),
+            ):
+                _del_idx = sorted(
+                    [_del_labels.index(k) for k in _del_sel if k in _del_labels],
+                    reverse=True,
+                )
+                for _di in _del_idx:
+                    if 0 <= _di < len(plan_data):
+                        plan_data.pop(_di)
+                _save_plan(plan_data)
+                st.success(f"✅ {len(_del_idx)} treino(s) excluído(s).")
+                st.rerun()
+
+    # ── Assistente Groq — Plano ───────────────────────────────────────────────
+    _ctx_plano_lines = [
+        f"Plano de treino com {len(plan_df)} sessões.",
+        f"Período: {plan_df['date'].min().date()} a {plan_df['date'].max().date()}",
+        f"Volume total: {_total_plan_km:.0f} km",
+        f"Treinos futuros: {len(plan_future)}",
+        "",
+        "Próximos treinos:",
+    ]
+    for _pr in (plan_data[:10] if plan_data else []):
+        _ctx_plano_lines.append(
+            f"- {str(_pr.get('date',''))[:10]} | {_pr.get('training_type','')} | "
+            f"{_pr.get('distance_km','')} km | {_pr.get('intensity','')} | {_pr.get('title','')}"
+        )
+    _ctx_plano = "\n".join(_ctx_plano_lines)
+    _groq_widget("Plano de Treino", _ctx_plano, "plano")
