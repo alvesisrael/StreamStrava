@@ -1240,7 +1240,7 @@ with tab_hoje:
                          category_orders={"Intensidade": INTENSITY_ORDER})
             fig.update_traces(textposition="inside", textinfo="percent+label")
             fig.update_layout(showlegend=False, margin=dict(t=40,b=0,l=0,r=0))
-            st.plotly_chart(fig, width="stretch")
+            st.plotly_chart(fig, use_container_width=True)
     with col_b:
         df_m = (df.groupby(["MesAnoOrd","MesAno"])
                   .agg(KM=("distance_km","sum")).reset_index()
@@ -1252,7 +1252,7 @@ with tab_hoje:
         fig.update_traces(textposition="outside")
         fig.update_layout(xaxis_tickangle=-45, showlegend=False,
                           margin=dict(t=40,b=0,l=0,r=0))
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, use_container_width=True)
 
     # ── Linha visual 2: Pace mensal + dias da semana ──────────────────────────
     col_a, col_b = st.columns(2)
@@ -1274,7 +1274,7 @@ with tab_hoje:
         set_pace_yaxis(fig, df_p["Pace"])
         fig.update_layout(title="⚡ Evolução do Pace + Média 3M",
                           xaxis_tickangle=-45, margin=dict(t=40,b=0,l=0,r=0))
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, use_container_width=True)
         st.caption("📖 Eixo Y invertido: mais alto = mais rápido.")
     with col_b:
         df_dia = (df["DiaSemana"].value_counts()
@@ -1284,7 +1284,7 @@ with tab_hoje:
                      title="📅 Dias mais ativos",
                      color_discrete_sequence=[PURPLE], text_auto=True)
         fig.update_layout(showlegend=False, margin=dict(t=40,b=0,l=0,r=0))
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, use_container_width=True)
 
     # ── Metas do mês (simples) ────────────────────────────────────────────────
     st.markdown("---")
@@ -1372,7 +1372,7 @@ with tab_hoje:
             yaxis=dict(title="Corridas", gridcolor="rgba(128,128,128,0.15)"),
             plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
             margin=dict(t=45, b=10, l=0, r=0), showlegend=False)
-        st.plotly_chart(fig_streak, width="stretch")
+        st.plotly_chart(fig_streak, use_container_width=True)
         if   _streak_atual >= 8: st.success(f"🔥 {_streak_atual} semanas consecutivas! Consistência de elite.")
         elif _streak_atual >= 4: st.info(f"💪 {_streak_atual} semanas em sequência — hábito sólido.")
         elif _streak_atual == 0: st.warning("⚠️ Sequência interrompida. Que tal retomar esta semana?")
@@ -1484,7 +1484,7 @@ with tab_desemp:
                     showarrow=False, font=dict(size=11, color="gray"), xanchor="left"
                 )]
             )
-            st.plotly_chart(fig, width="stretch")
+            st.plotly_chart(fig, use_container_width=True)
             st.caption("Pace do bloco principal (laps de recuperação excluídos). Barra = desvio padrão. Hover = nº de atividades por categoria.")
         else:
             st.info("Sem dados de lap disponíveis para calcular pace por tipo de treino.")
@@ -1510,7 +1510,7 @@ with tab_desemp:
             fig.add_hline(y=25, line_dash="dash", line_color=RED,
                           annotation_text="> 25% — treino intervalado")
             fig.update_layout(xaxis_tickangle=-45)
-            st.plotly_chart(fig, width="stretch")
+            st.plotly_chart(fig, use_container_width=True)
             st.caption("CV < 10%: ritmo uniforme. CV > 25%: sessão de tiros/intervalos.")
 
 
@@ -1568,7 +1568,7 @@ with tab_desemp:
                 yaxis=dict(title="spm", range=[140, 200], gridcolor="rgba(128,128,128,0.12)"),
                 plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
                 margin=dict(t=45, b=10, l=0, r=0))
-            st.plotly_chart(fig_cad, width="stretch")
+            st.plotly_chart(fig_cad, use_container_width=True)
             if _cad_atual < 170:
                 st.warning("⚠️ Cadência baixa — experimente aumentar a frequência sem mudar a velocidade. Metrônomo a 175 bpm ajuda.")
             elif 175 <= _cad_atual <= 185:
@@ -1614,7 +1614,7 @@ with tab_desemp:
                 set_pace_yaxis(fig_ae, ae_m["PaceZ2"])
                 fig_ae.update_layout(title="Pace médio em Z2 por mês  (↓ = motor aeróbico maior)",
                                      xaxis_tickangle=-45, showlegend=False)
-                st.plotly_chart(fig_ae, width="stretch")
+                st.plotly_chart(fig_ae, use_container_width=True)
                 if   delta_ae >= 15: st.success(f"🚀 +{delta_ae:.0f}s/km mais rápido na mesma FC de Z2!")
                 elif delta_ae > 0:   st.info(f"📈 Melhora de +{delta_ae:.0f}s/km. Continue o volume fácil.")
                 else:                st.warning("⚠️ Eficiência Z2 estável ou em queda. Verifique excesso de Z3.")
@@ -1637,7 +1637,7 @@ with tab_desemp:
                 fig.update_yaxes(autorange="reversed")
                 fig.add_vrect(x0=15, x1=26, fillcolor=GREEN, opacity=0.07,
                               annotation_text="Confortável")
-                st.plotly_chart(fig, width="stretch")
+                st.plotly_chart(fig, use_container_width=True)
             with col_cl2:
                 if "weather_rain" in df_w.columns:
                     pace_chuva = df_w[df_w["weather_rain"] > 0]["pace_sec_km"].mean()
@@ -1663,7 +1663,7 @@ with tab_desemp:
                 set_pace_yaxis(fig, df_f["Pace"].dropna())
                 fig.update_traces(textposition="outside")
                 fig.update_layout(showlegend=False)
-                st.plotly_chart(fig, width="stretch")
+                st.plotly_chart(fig, use_container_width=True)
 
     with st.expander("⛰️ Análise de Elevação"):
         df_e = df_run[df_run["elevation_gain"].notna() & (df_run["elevation_gain"] > 0)].copy()
@@ -1736,7 +1736,7 @@ with tab_desemp:
                                           showlegend=False)
                     set_pace_yaxis(fig_gap, df_gap["pace_sec_km"])
                     fig_gap.update_yaxes(autorange="reversed")
-                    st.plotly_chart(fig_gap, width="stretch")
+                    st.plotly_chart(fig_gap, use_container_width=True)
                     st.caption("Pontos abaixo da diagonal = subidas com alto custo de pace. "
                                "GAP normaliza para terreno plano equivalente.")
 
@@ -1763,7 +1763,7 @@ with tab_desemp:
                 fig_trend.update_layout(title=f"Acumulado de Elevação por {_period_sel}",
                                         yaxis_title="Elevação (m)",
                                         legend=dict(orientation="h", y=-0.22))
-                st.plotly_chart(fig_trend, width="stretch")
+                st.plotly_chart(fig_trend, use_container_width=True)
 
             # ── linha 2: eficiência ao longo do tempo  |  Pace×FC×Elevação ─────────
             col_e3, col_e4 = st.columns(2)
@@ -1797,7 +1797,7 @@ with tab_desemp:
                         title="Eficiência em Subidas — evolução",
                         yaxis_title="Pace Vertical (m/h)",
                         legend=dict(orientation="h", y=-0.22))
-                    st.plotly_chart(fig_eff, width="stretch")
+                    st.plotly_chart(fig_eff, use_container_width=True)
                     st.caption("Subindo = ficando mais eficiente nas subidas ao longo do tempo.")
                 else:
                     st.info("Dados de tempo de movimento insuficientes para calcular pace vertical.")
@@ -1836,7 +1836,7 @@ with tab_desemp:
                         opacity=0.82)
                     set_pace_yaxis(fig_pfc, df_pfc["pace_sec_km"])
                     fig_pfc.update_layout(legend=dict(orientation="h", y=-0.32, font_size=10))
-                    st.plotly_chart(fig_pfc, width="stretch")
+                    st.plotly_chart(fig_pfc, use_container_width=True)
                 else:
                     st.info("Sem dados de FC disponíveis para análise combinada.")
 
@@ -1964,7 +1964,7 @@ with tab_carga:
                 yaxis2=dict(title="TSB", overlaying="y", side="right",
                             showgrid=False, zeroline=False),
                 legend=dict(orientation="h", y=-0.18), hovermode="x unified")
-            st.plotly_chart(fig_pmc, width="stretch")
+            st.plotly_chart(fig_pmc, use_container_width=True)
             if   tsb_at2 > 20:    st.info("😴 Descansado — boa janela para qualidade ou competição.")
             elif tsb_at2 >= 5:    st.success("✅ Forma ideal (+5 a +20).")
             elif tsb_at2 >= -10:  st.info("⚙️ Treinando normalmente. Monitore a fadiga.")
@@ -2000,7 +2000,7 @@ with tab_carga:
                           annotation_text="Zona Segura")
             fig.add_hline(y=1.5, line_dash="dash", line_color=RED,
                           annotation_text="Risco Alto")
-            st.plotly_chart(fig, width="stretch")
+            st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("Dados de training_load não disponíveis.")
     with col_ac2:
@@ -2022,7 +2022,7 @@ with tab_carga:
             fig.add_hline(y=-10, line_dash="dash", line_color=AMBER)
             fig.update_layout(title="Variação de Carga Semanal (%)",
                               xaxis_tickangle=-45, yaxis_title="%")
-            st.plotly_chart(fig, width="stretch")
+            st.plotly_chart(fig, use_container_width=True)
 
     # ── Volume semanal e MoM ──────────────────────────────────────────────────
     st.markdown("---")
@@ -2036,7 +2036,7 @@ with tab_carga:
                      color_discrete_sequence=[PURPLE], text_auto=".0f",
                      labels={"SemanaStr":"","KM":"km"})
         fig.update_layout(xaxis_tickangle=-45, showlegend=False)
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, use_container_width=True)
     with col_v2:
         df_mom = (df_run.groupby(["MesAnoOrd","MesAno"])
                         .agg(KM=("distance_km","sum")).reset_index()
@@ -2055,7 +2055,7 @@ with tab_carga:
                       annotation_text="+30% — risco overload")
         fig.update_layout(title="📊 Crescimento MoM (%)", yaxis_title="%",
                           xaxis_tickangle=-45)
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, use_container_width=True)
         st.caption("MoM = Month over Month. >30% aumenta risco de lesão.")
 
 
@@ -2117,7 +2117,7 @@ with tab_carga:
             plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
             legend=dict(orientation="h", y=-0.15, x=0),
             margin=dict(t=50, b=10, l=0, r=0), hovermode="x unified")
-        st.plotly_chart(fig_yoy, width="stretch")
+        st.plotly_chart(fig_yoy, use_container_width=True)
         with st.expander("Ver tabela mês a mês"):
             _dtbl = [{"Mês":_ML[i-1].capitalize(),
                       str(_ano_ant): f"{_yoy_ant.loc[_yoy_ant['_mes']==i,'KM'].values[0]:.0f} km",
@@ -2159,7 +2159,7 @@ with tab_carga:
                          labels={"Pct":"% Tempo","Zona FC":""})
             fig.update_traces(textposition="outside")
             fig.update_layout(showlegend=False)
-            st.plotly_chart(fig, width="stretch")
+            st.plotly_chart(fig, use_container_width=True)
 
             # Métricas de polarização abaixo do gráfico
             pm1, pm2, pm3 = st.columns(3)
@@ -2190,7 +2190,7 @@ with tab_carga:
                           category_orders={"Zona FC": ZONA_ORDER})
             fig2.update_traces(textinfo="percent+label", textposition="inside")
             fig2.update_layout(showlegend=False)
-            st.plotly_chart(fig2, width="stretch")
+            st.plotly_chart(fig2, use_container_width=True)
             st.caption(
                 "📖 **Modelo Seiler:** ~80% fácil (Z1+Z2), ~5% cinza (Z3 — evitar), "
                 "~15% intenso (Z4+Z5). Z3 é fisiol. cara sem desenvolver base ou velocidade.")
@@ -2217,7 +2217,7 @@ with tab_carga:
             fig.add_hline(y=10, line_dash="dot",  line_color=AMBER,
                           annotation_text="+10 bpm — atenção")
             fig.update_layout(xaxis_tickangle=-45)
-            st.plotly_chart(fig, width="stretch")
+            st.plotly_chart(fig, use_container_width=True)
             st.caption("Deriva alta (>10 bpm) = sinal de fadiga ou desidratação.")
         with col_d2:
             df_fc_m = (df_run[df_run["average_heartrate"].notna()]
@@ -2233,7 +2233,7 @@ with tab_carga:
                               color_discrete_sequence=[RED],
                               labels={"FC":"bpm","MesAno":""})
                 fig.update_layout(xaxis_tickangle=-45)
-                st.plotly_chart(fig, width="stretch")
+                st.plotly_chart(fig, use_container_width=True)
                 st.caption("FC em queda na mesma intensidade = adaptação cardiovascular positiva.")
 
 
@@ -3140,7 +3140,7 @@ with tab_hist:
             "📏 %{customdata[2]:.1f} km · ⚡ %{customdata[3]}/km<br>"
             "⏱️ %{customdata[4]} · ⛰️ %{customdata[5]:.0f} m<extra></extra>"))
         set_pace_yaxis(fig, df_sc["pace_sec_km"])
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, use_container_width=True)
         st.caption("📖 Eixo Y invertido — pontos mais altos = mais rápido.")
 
         # Tabela completa
@@ -3167,7 +3167,7 @@ with tab_hist:
         df_tab["calories"]           = df_tab["calories"].apply(
             lambda x: f"{int(x)}" if not pd.isna(x) else "—")
         df_tab = df_tab.rename(columns=cols)
-        st.dataframe(df_tab, hide_index=True, width="stretch")
+        st.dataframe(df_tab, hide_index=True, use_container_width=True)
 
         # Detalhes por lap
         st.markdown("---")
@@ -3242,7 +3242,7 @@ with tab_hist:
                         if TEST_3K_SEC:
                             titulo += f"  ·  ref. teste {TEST_3K_STR}/km"
                         fig.update_layout(title=titulo, xaxis_title="Lap")
-                        st.plotly_chart(fig, width="stretch")
+                        st.plotly_chart(fig, use_container_width=True)
                 with col_b:
                     laps_fc = laps_ativ[laps_ativ["average_heartrate"].notna()].copy()
                     if not laps_fc.empty:
@@ -3262,7 +3262,7 @@ with tab_hist:
                                             name="FC Máx", opacity=0.5)
                         fig.update_layout(title="❤️ FC por Lap",
                                           xaxis_title="Lap", yaxis_title="bpm")
-                        st.plotly_chart(fig, width="stretch")
+                        st.plotly_chart(fig, use_container_width=True)
                     else:
                         st.info("FC não disponível para esta atividade.")
 
@@ -3286,7 +3286,7 @@ with tab_hist:
                 df_laps_tab["total_elevation_gain"] = df_laps_tab["total_elevation_gain"].apply(
                     lambda x: f"{x:.0f} m" if not pd.isna(x) else "—")
                 st.dataframe(df_laps_tab.rename(columns=cols_lap),
-                             hide_index=True, width="stretch")
+                             hide_index=True, use_container_width=True)
 
                 # ── Assistente de Atividade ───────────────────────────────────
                 st.markdown("---")
