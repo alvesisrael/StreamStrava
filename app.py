@@ -704,37 +704,19 @@ pmc_raw = calc_pmc(_runs_raw)
 st.sidebar.title("🎛️ Filtros")
 min_d = df_raw["start_date"].min().date()
 max_d = df_raw["start_date"].max().date()
-
-# ── Sanitize cached date_range: clamp to [min_d, max_d] to avoid Streamlit
-#    raising StreamlitAPIException when data changes between sessions ──────
-def _clamp_date_range(key, _min, _max):
-    v = st.session_state.get(key)
-    if v is None:
-        return
-    try:
-        if isinstance(v, (tuple, list)) and len(v) == 2:
-            s = max(_min, min(_max, v[0]))
-            e = max(_min, min(_max, v[1]))
-            if s > e:
-                s, e = _min, _max
-            st.session_state[key] = (s, e)
-        else:
-            del st.session_state[key]
-    except Exception:
-        if key in st.session_state:
-            del st.session_state[key]
-
-_clamp_date_range("date_range", min_d, max_d)
-
-_col1, _col2 = st.sidebar.columns([3, 1])
-with _col1:
-    st.markdown("**Período**")
-with _col2:
-    if st.button("↺", help="Resetar para o período completo", key="reset_date"):
-        st.session_state["date_range"] = (min_d, max_d)
-
-_quick_cols = st.sidebar.columns(3)
 _today = _dt.date.today()
+
+# ── Estado dos filtros aplicados ──────────────────────────────────────────────
+if "f_inicio" not in st.session_state:
+    st.session_state["f_inicio"] = min_d
+if "f_fim" not in st.session_state:
+    st.session_state["f_fim"] = max_d
+# clamp caso dados mudem entre sessões
+st.session_state["f_inicio"] = max(min_d, min(max_d, st.session_state["f_inicio"]))
+st.session_state["f_fim"]    = max(min_d, min(max_d, st.session_state["f_fim"]))
+
+# ── Atalhos rápidos de período ────────────────────────────────────────────────
+st.sidebar.markdown("**📅 Período**")
 _quick = {
     "7d":   (max(min_d, _today - _dt.timedelta(days=7)),   min(_today, max_d)),
     "30d":  (max(min_d, _today - _dt.timedelta(days=30)),  min(_today, max_d)),
@@ -743,102 +725,54 @@ _quick = {
     "Ano":  (max(min_d, _dt.date(_today.year, 1, 1)),      min(_today, max_d)),
     "Tudo": (min_d, max_d),
 }
+_qcols = st.sidebar.columns(3)
 for _i, (_lbl, _rng) in enumerate(_quick.items()):
-    if _quick_cols[_i % 3].button(_lbl, key=f"qd_{_lbl}", use_container_width=True):
-        st.session_state["date_range"] = _rng
+    if _qcols[_i % 3].button(_lbl, key=f"qd_{_lbl}", use_container_width=True):
+        st.session_state["f_inicio"] = _rng[0]
+        st.session_state["f_fim"]    = _rng[1]
         st.rerun()
 
-# Use key= only; Streamlit uses session_state[key] as the current value.
-# Do NOT pass value= when key= is set — avoids the dual-source conflict.
-if "date_range" not in st.session_state:
-    st.session_state["date_range"] = (min_d, max_d)
-
-date_range = st.sidebar.date_input(
-    "Período",
-    min_value=min_d, max_value=max_d, key="date_range",
-    label_visibility="collapsed")
-
-sports_all      = sorted(df_raw["sport_type"].dropna().unique())
-_default_sports = [s for s in ["Run","TrailRun"] if s in sports_all] or sports_all
-selected_sports = st.sidebar.multiselect("Modalidade", sports_all, default=_default_sports)
-
-has_fc_class = ("Intensidade_FC" in df_raw.columns and df_raw["Intensidade_FC"].notna().any())
-if has_fc_class:
-    int_mode = st.sidebar.radio(
-        "Classificação de Intensidade",
-        ["Automática (FC)", "Manual"],
-        help="Automática: % tempo em zona de FC por atividade. Manual: coluna Intensidade manual.")
-else:
-    int_mode = "Manual"
-
-int_col  = "Intensidade_FC" if int_mode == "Automática (FC)" else "Intensidade"
-int_opts = [i for i in INTENSITY_ORDER
-            if int_col in df_raw.columns
-            and i in df_raw[int_col].dropna().unique()]
-sel_int  = st.sidebar.multiselect("Filtrar Intensidade", int_opts, default=int_opts)
-
-st.sidebar.markdown("---")
-_test_3k_default = st.session_state.get("test_3k_str", "3:28")
-TEST_3K_STR = st.sidebar.text_input(
-    "🏁 Pace do Teste 3km (MM:SS)",
-    value=_test_3k_default,
-    key="test_3k_str",
-    help="Pace médio do seu último teste de 3km. "
-         "Define as zonas de intensidade do treinador no gráfico de laps."
-)
-def _parse_test_3k(s):
-    """Converte MM:SS → segundos/km. Retorna None se inválido."""
-    try:
-        parts = s.strip().split(":")
-        if len(parts) == 2:
-            return int(parts[0]) * 60 + int(parts[1])
-        elif len(parts) == 3:      # HH:MM:SS
-            return int(parts[1]) * 60 + int(parts[2])
-    except Exception:
-        pass
-    return None
-
-TEST_3K_SEC = _parse_test_3k(TEST_3K_STR)
-if TEST_3K_SEC:
-    st.sidebar.caption(
-        f"Zonas ativas para teste {TEST_3K_STR}/km  ·  "
-        f"Trote ≥ {TEST_3K_SEC+80}s · Leve {TEST_3K_SEC+50}–{TEST_3K_SEC+60}s · "
-        f"Forte {TEST_3K_SEC+15}–{TEST_3K_SEC+20}s/km"
+# ── Formulário de filtros (não dispara rerun até clicar Aplicar) ──────────────
+with st.sidebar.form("form_filtros", border=False):
+    _ci, _cf = st.columns(2)
+    with _ci:
+        _sb_ini = st.date_input(
+            "Início",
+            value=st.session_state["f_inicio"],
+            min_value=min_d, max_value=max_d,
+            format="DD/MM/YYYY",
+        )
+    with _cf:
+        _sb_fim = st.date_input(
+            "Fim",
+            value=st.session_state["f_fim"],
+            min_value=min_d, max_value=max_d,
+            format="DD/MM/YYYY",
+        )
+    _aplicar = st.form_submit_button(
+        "✅ Aplicar Filtros",
+        use_container_width=True,
+        type="primary",
     )
-else:
-    st.sidebar.warning("Formato inválido — use MM:SS (ex: 3:28)")
-    TEST_3K_SEC = None
 
-def _pace_zone(pace_sec, test_sec):
-    """Retorna (nome_zona, cor_hex) baseado no teste 3km do treinador.
-    pace_sec = pace da atividade em seg/km
-    test_sec = pace do teste 3km em seg/km
-    Escala: verde (fácil) → amarelo → laranja → vermelho (muito forte)
-    """
-    if test_sec is None:
-        return ("—", "#3498DB")
-    d = pace_sec - test_sec   # positivo = mais lento que o teste (mais fácil)
-    if   d <= 0:              return ("Muito Forte – Tiros Curtos",  "#C0392B")   # vermelho escuro
-    elif d <= 10:             return ("Muito Forte – Tiros Longos",  "#E74C3C")   # vermelho
-    elif d <= 20:             return ("Forte",                        "#E67E22")   # laranja
-    elif d <= 32:             return ("Moderado–Firme",               "#F39C12")   # âmbar
-    elif d <= 45:             return ("Moderado",                     "#F9E79F")   # amarelo claro
-    elif d <= 65:             return ("Leve",                         "#ABEBC6")   # verde claro
-    elif d <= 85:             return ("Muito Leve",                   "#2ECC71")   # verde
-    else:                     return ("Trote/Regenerativo",           "#1ABC9C")   # verde-água
+if _aplicar:
+    st.session_state["f_inicio"] = _sb_ini
+    st.session_state["f_fim"]    = _sb_fim
 
+# ── Groq API Key ──────────────────────────────────────────────────────────────
 st.sidebar.markdown("---")
 GROQ_KEY = st.sidebar.text_input(
     "🤖 Groq API Key",
     value=st.session_state.get("groq_key_val", ""),
     type="password",
     key="groq_key_val",
-    help="Chave da API Groq (console.groq.com). Necessária para o Assistente de Treino em cada aba."
+    help="Chave da API Groq (console.groq.com). Necessária para o Assistente de Treino."
 )
 
+# ── FC Máxima ─────────────────────────────────────────────────────────────────
 st.sidebar.markdown("---")
 FC_MAX = st.sidebar.number_input(
-    "❤️ FC Máxima pessoal (bpm)",
+    "❤️ FC Máxima (bpm)",
     min_value=150, max_value=230,
     value=st.session_state.get("fc_max_val", 195),
     step=1, key="fc_max_val",
@@ -846,23 +780,65 @@ FC_MAX = st.sidebar.number_input(
 )
 _z1 = round(FC_MAX * 0.70); _z2 = round(FC_MAX * 0.80)
 _z3 = round(FC_MAX * 0.87); _z4 = round(FC_MAX * 0.93)
-st.sidebar.caption(
-    f"Z1 < {_z1} · Z2 {_z1}–{_z2} · Z3 {_z2}–{_z3} · Z4 {_z3}–{_z4} · Z5 ≥ {_z4}"
-)
+st.sidebar.caption(f"Z1<{_z1} · Z2 {_z1}–{_z2} · Z3 {_z2}–{_z3} · Z4 {_z3}–{_z4} · Z5≥{_z4}")
+
+# ── Metas mensais ─────────────────────────────────────────────────────────────
 st.sidebar.markdown("---")
 st.sidebar.markdown("**🎯 Metas mensais**")
 META_KM_MES = st.sidebar.number_input(
-    "📏 Meta de km/mês", min_value=0, max_value=600,
+    "📏 km/mês", min_value=0, max_value=600,
     value=st.session_state.get("meta_km_val", 150), step=10, key="meta_km_val"
 )
 META_TR_MES = st.sidebar.number_input(
-    "🏃 Meta de treinos/mês", min_value=0, max_value=40,
+    "🏃 Treinos/mês", min_value=0, max_value=40,
     value=st.session_state.get("meta_tr_val", 16), step=1, key="meta_tr_val"
 )
 META_DP_MES = st.sidebar.number_input(
-    "⛰️ Meta D+ mensal (m)", min_value=0, max_value=20000,
+    "⛰️ D+/mês (m)", min_value=0, max_value=20000,
     value=st.session_state.get("meta_dp_val", 3000), step=100, key="meta_dp_val"
 )
+
+# ── Configurações avançadas ───────────────────────────────────────────────────
+st.sidebar.markdown("---")
+with st.sidebar.expander("⚙️ Avançado", expanded=False):
+    TEST_3K_STR = st.text_input(
+        "🏁 Pace do Teste 3km (MM:SS)",
+        value=st.session_state.get("test_3k_str", "3:28"),
+        key="test_3k_str",
+        help="Define zonas de intensidade no histórico de laps."
+    )
+
+# ── Helpers mantidos para compatibilidade ─────────────────────────────────────
+def _parse_test_3k(s):
+    try:
+        parts = s.strip().split(":")
+        if len(parts) == 2:
+            return int(parts[0]) * 60 + int(parts[1])
+        elif len(parts) == 3:
+            return int(parts[1]) * 60 + int(parts[2])
+    except Exception:
+        pass
+    return None
+
+TEST_3K_SEC = _parse_test_3k(TEST_3K_STR)
+
+def _pace_zone(pace_sec, test_sec):
+    if test_sec is None:
+        return ("—", "#3498DB")
+    d = pace_sec - test_sec
+    if   d <= 0:   return ("Muito Forte – Tiros Curtos", "#C0392B")
+    elif d <= 10:  return ("Muito Forte – Tiros Longos", "#E74C3C")
+    elif d <= 20:  return ("Forte",                      "#E67E22")
+    elif d <= 32:  return ("Moderado–Firme",              "#F39C12")
+    elif d <= 45:  return ("Moderado",                   "#F9E79F")
+    elif d <= 65:  return ("Leve",                       "#ABEBC6")
+    elif d <= 85:  return ("Muito Leve",                 "#2ECC71")
+    else:          return ("Trote/Regenerativo",         "#1ABC9C")
+
+# Modalidade e intensidade — sem filtro na sidebar (sempre Run+TrailRun)
+selected_sports = ["Run", "TrailRun"]
+int_col = "Intensidade_FC" if ("Intensidade_FC" in df_raw.columns and df_raw["Intensidade_FC"].notna().any()) else "Intensidade"
+sel_int = []
 
 # Recalcula Zona FC com FCmax personalizado — VETORIZADO
 if not laps_raw.empty:
@@ -870,15 +846,12 @@ if not laps_raw.empty:
     laps_raw["Zona FC"] = zona_fc_vec(laps_raw["average_heartrate"])
 
 # ── Filtros de data / modalidade / intensidade ────────────────────────────────
-s_dt = pd.Timestamp(date_range[0]) if len(date_range) >= 1 else pd.Timestamp(min_d)
-e_dt = (pd.Timestamp(date_range[1]) + pd.Timedelta(hours=23, minutes=59, seconds=59)) \
-       if len(date_range) == 2 else (pd.Timestamp(max_d) + pd.Timedelta(hours=23, minutes=59, seconds=59))
+s_dt = pd.Timestamp(st.session_state.get("f_inicio", min_d))
+e_dt = pd.Timestamp(st.session_state.get("f_fim", max_d)) + pd.Timedelta(hours=23, minutes=59, seconds=59)
 
 def filt_act(d):
     mask = ((d["start_date"] >= s_dt) & (d["start_date"] <= e_dt)
             & d["sport_type"].isin(selected_sports))
-    if sel_int and int_col in d.columns:
-        mask &= d[int_col].isin(sel_int) | d[int_col].isna()
     return d[mask].copy()
 
 def filt_laps(d):
