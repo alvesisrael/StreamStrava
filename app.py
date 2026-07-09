@@ -1444,7 +1444,7 @@ with tab_desemp:
     with col_a:
         if "Intensidade" in df_run.columns and not lps_run.empty:
             _mp = (lps_run.groupby("activity_id")
-                   .apply(compute_main_laps_pace).dropna().reset_index())
+                   .apply(compute_main_laps_pace, include_groups=False).dropna().reset_index())
             _mp.columns = ["id","pace_main"]
             # Somente atividades COM dados de lap — sem fallback para pace médio geral
             df_run_p = df_run.merge(_mp, on="id", how="inner")
@@ -1495,7 +1495,7 @@ with tab_desemp:
             def cv_pace(grp):
                 p = grp["pace_sec_km"].dropna()
                 return (p.std() / p.mean() * 100) if len(p) > 1 and p.mean() > 0 else None
-            cv_df = lps_run.groupby("activity_id").apply(cv_pace).dropna().reset_index()
+            cv_df = lps_run.groupby("activity_id")[["pace_sec_km"]].apply(cv_pace).dropna().reset_index()
             cv_df.columns = ["activity_id","CV_Pace"]
             lps_cv = lps_run.merge(cv_df, on="activity_id")
             df_cv_m = (lps_cv.groupby(["MesAnoOrd","MesAno"])
@@ -2685,6 +2685,7 @@ with tab_mapa:
         with col1:
             tile = st.radio("Mapa base",
                             ["Claro", "Satélite", "Topográfico"],
+                            index=1,
                             horizontal=True, key="mapa_tile",
                             help="Satélite / Topográfico: ótimos para trail.")
         with col2:
