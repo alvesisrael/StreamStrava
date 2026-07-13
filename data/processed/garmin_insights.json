@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-07-07",
+  "updated_at": "2026-07-13",
   "race_predictions": {
     "5K": {
       "time": "17:52",
@@ -23,38 +23,8 @@
     "previous": 60.0,
     "change": 0.0
   },
-  "rhr_today": 47,
+  "rhr_today": 53,
   "body_battery": [
-    {
-      "date": "2026-06-08",
-      "charged": 57,
-      "drained": 46
-    },
-    {
-      "date": "2026-06-09",
-      "charged": 32,
-      "drained": 53
-    },
-    {
-      "date": "2026-06-10",
-      "charged": 34,
-      "drained": 58
-    },
-    {
-      "date": "2026-06-11",
-      "charged": 56,
-      "drained": 68
-    },
-    {
-      "date": "2026-06-12",
-      "charged": 54,
-      "drained": 43
-    },
-    {
-      "date": "2026-06-13",
-      "charged": 11,
-      "drained": 85
-    },
     {
       "date": "2026-06-14",
       "charged": 93,
@@ -172,8 +142,38 @@
     },
     {
       "date": "2026-07-07",
-      "charged": 40,
-      "drained": 25
+      "charged": 42,
+      "drained": 77
+    },
+    {
+      "date": "2026-07-08",
+      "charged": 87,
+      "drained": 47
+    },
+    {
+      "date": "2026-07-09",
+      "charged": 34,
+      "drained": 83
+    },
+    {
+      "date": "2026-07-10",
+      "charged": 28,
+      "drained": 30
+    },
+    {
+      "date": "2026-07-11",
+      "charged": 54,
+      "drained": 54
+    },
+    {
+      "date": "2026-07-12",
+      "charged": 9,
+      "drained": 69
+    },
+    {
+      "date": "2026-07-13",
+      "charged": 33,
+      "drained": 11
     }
   ]
 }
