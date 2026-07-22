@@ -105,14 +105,14 @@ def fetch_and_merge_activities(start: str, df_existing: pd.DataFrame) -> pd.Data
 
     new_rows = [build_activity_row(a, resting_hr=resting_hr, max_hr=max_hr) for a in raw]
     df_new   = pd.DataFrame(new_rows)
-    df_new["start_date"] = pd.to_datetime(df_new["start_date"])
+    df_new["start_date"] = pd.to_datetime(df_new["start_date"], utc=True).dt.tz_localize(None)
 
     if df_existing.empty:
         return df_new.sort_values("start_date").reset_index(drop=True)
 
     df_combined = pd.concat([df_existing, df_new], ignore_index=True)
     df_combined = df_combined.drop_duplicates(subset=["id"], keep="last")
-    df_combined["start_date"] = pd.to_datetime(df_combined["start_date"])
+    df_combined["start_date"] = pd.to_datetime(df_combined["start_date"], utc=True).dt.tz_localize(None)
     return df_combined.sort_values("start_date").reset_index(drop=True)
 
 

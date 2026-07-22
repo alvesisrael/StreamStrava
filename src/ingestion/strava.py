@@ -148,8 +148,9 @@ def build_activity_row(a: dict, resting_hr: int = RESTING_HR, max_hr: int = MAX_
     sport_raw = a.get("sport_type") or a.get("type") or "Run"
     sport     = SPORT_MAP.get(sport_raw, sport_raw)
 
-    # start_date: Strava returns UTC, store as local
+    # start_date: Strava returns local time with Z suffix — strip to naive datetime
     start_local = a.get("start_date_local") or a.get("start_date") or ""
+    start_local = start_local.replace("Z", "").replace("+00:00", "") if start_local else ""
 
     return {
         "id":                   a.get("id"),
