@@ -1,332 +1,234 @@
 """
-sync.py — PerformanceRun incremental sync
-==========================================
-Replaces main.py. Uses Garmin as primary source for metrics.
-Strava is used only for map_polyline / altitude_stream / lat-lon (GPS).
+sync.py — PerformanceRun sync via Strava
+=========================================
+Fonte única de dados: Strava API.
+O Amazfit T-Rex 3 sincroniza automaticamente com o Strava após cada treino.
 
-Run:
-    python sync.py                   # incremental (last activity → today)
-    python sync.py --full            # full backfill (since 2025-03-01)
-    python sync.py --date 2025-06-01 # from specific date
-    python sync.py --insights-only   # only refresh garmin_insights.json
+Uso:
+    python sync.py                   # incremental (desde o último treino)
+    python sync.py --full            # backfill completo desde STRAVA_START
+    python sync.py --date 2025-06-01 # a partir de uma data específica
+    python sync.py --laps-only       # só atualiza laps das atividades existentes
+
+Nota: garmin_insights.json é preservado (dados históricos do Garmin).
+      Ele não é mais atualizado — serve apenas para consulta no dashboard.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import os
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-PROJECT_ROOT  = Path(__file__).parent
-CONSOLIDATED  = PROJECT_ROOT / "data" / "processed" / "activities_consolidated.csv"
-INSIGHTS_FILE = PROJECT_ROOT / "data" / "processed" / "garmin_insights.json"
-GARMIN_START  = "2025-03-01"   # earliest Garmin data available
+PROJECT_ROOT   = Path(__file__).parent
+CONSOLIDATED   = PROJECT_ROOT / "data" / "processed" / "activities_consolidated.csv"
+LAPS_CSV       = PROJECT_ROOT / "data" / "processed" / "activity_laps_consolidated.csv"
+INSIGHTS_FILE  = PROJECT_ROOT / "data" / "processed" / "garmin_insights.json"
+STRAVA_START   = "2025-01-01"   # data mais antiga para backfill completo
 
-# ── DB layer (optional — graceful fallback if src.db not available) ───────────
+
+# ── DB layer (opcional — graceful fallback) ───────────────────────────────────
 def _try_import_db():
     try:
-        from src.db.queries import upsert_activities, upsert_laps, upsert_garmin_insights
-        return upsert_activities, upsert_laps, upsert_garmin_insights
+        from src.db.queries import upsert_activities, upsert_laps
+        return upsert_activities, upsert_laps
     except ImportError:
-        return None, None, None
+        return None, None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _date_to_ts(d: str | date) -> int:
+    """Converte data YYYY-MM-DD para Unix timestamp (início do dia UTC)."""
+    if isinstance(d, str):
+        d = date.fromisoformat(d)
+    return int(datetime(d.year, d.month, d.day, tzinfo=timezone.utc).timestamp())
+
+
+def load_existing_activities() -> pd.DataFrame:
+    if CONSOLIDATED.exists():
+        return pd.read_csv(
+            CONSOLIDATED, sep=";", engine="python",
+            on_bad_lines="skip", parse_dates=["start_date"]
+        )
+    return pd.DataFrame()
+
+
+def load_existing_laps() -> pd.DataFrame:
+    if LAPS_CSV.exists():
+        return pd.read_csv(LAPS_CSV, sep=";", engine="python", on_bad_lines="skip")
+    return pd.DataFrame()
+
+
+def get_last_date(df: pd.DataFrame) -> str:
+    """Retorna o dia após a última atividade no CSV, ou STRAVA_START."""
+    if df.empty or "start_date" not in df.columns:
+        return STRAVA_START
+    last = pd.to_datetime(df["start_date"]).max()
+    return (last + timedelta(days=1)).strftime("%Y-%m-%d")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Activities sync
 # ─────────────────────────────────────────────────────────────────────────────
 
-def load_existing() -> pd.DataFrame:
-    if CONSOLIDATED.exists():
-        return pd.read_csv(CONSOLIDATED, sep=";", engine="python", on_bad_lines="skip",
-                           parse_dates=["start_date"])
-    return pd.DataFrame()
+def fetch_and_merge_activities(start: str, df_existing: pd.DataFrame) -> pd.DataFrame:
+    from src.ingestion.strava import fetch_strava_activities, build_activity_row
 
+    # Lê FC repouso do garmin_insights.json se disponível (dado histórico)
+    resting_hr, max_hr = 45, 195
+    if INSIGHTS_FILE.exists():
+        try:
+            with open(INSIGHTS_FILE) as f:
+                ins = json.load(f)
+            resting_hr = ins.get("rhr_today") or resting_hr
+        except Exception:
+            pass
 
-def get_last_date(df: pd.DataFrame) -> str | None:
-    if df.empty or "start_date" not in df.columns:
-        return None
-    last = pd.to_datetime(df["start_date"]).max()
-    return (last + timedelta(days=1)).strftime("%Y-%m-%d")
+    after_ts  = _date_to_ts(start)
+    before_ts = _date_to_ts(date.today()) + 86400  # inclui hoje
 
+    print(f"\n📥 Buscando atividades Strava desde {start}...")
+    raw = fetch_strava_activities(after_ts=after_ts, before_ts=before_ts)
 
-def fetch_and_merge(start: str, end: str, df_existing: pd.DataFrame) -> pd.DataFrame:
-    from src.ingestion.garmin import fetch_garmin_activities, build_garmin_row
-
-    print(f"[Garmin] Fetching activities {start} → {end} ...")
-    raw = fetch_garmin_activities(start, end)
     if not raw:
-        print("  No new activities found.")
+        print("  Nenhuma atividade nova encontrada.")
         return df_existing
 
-    print(f"  Found {len(raw)} activities.")
-    new_rows = [build_garmin_row(a) for a in raw]
-    df_new = pd.DataFrame(new_rows)
+    print(f"  ✅ {len(raw)} atividades encontradas.")
+
+    new_rows = [build_activity_row(a, resting_hr=resting_hr, max_hr=max_hr) for a in raw]
+    df_new   = pd.DataFrame(new_rows)
     df_new["start_date"] = pd.to_datetime(df_new["start_date"])
 
     if df_existing.empty:
-        return df_new
+        return df_new.sort_values("start_date").reset_index(drop=True)
 
     df_combined = pd.concat([df_existing, df_new], ignore_index=True)
     df_combined = df_combined.drop_duplicates(subset=["id"], keep="last")
-
-    # Secondary dedup: same start_date within same minute → keep longer activity
-    # (Garmin sometimes creates two records for the same workout)
     df_combined["start_date"] = pd.to_datetime(df_combined["start_date"])
-    df_combined = df_combined.sort_values("distance_km", ascending=False)
-    df_combined["_ts_min"] = df_combined["start_date"].dt.floor("min")
-    df_combined = df_combined.drop_duplicates(subset=["_ts_min"], keep="first")
-    df_combined = df_combined.drop(columns=["_ts_min"])
-
     return df_combined.sort_values("start_date").reset_index(drop=True)
-
-
-def enrich_polylines(df: pd.DataFrame) -> pd.DataFrame:
-    """Try to backfill GPS from Strava if token available."""
-    try:
-        from src.auth.strava_auth import get_valid_token
-        from src.ingestion.garmin import enrich_with_strava_polylines
-        token = get_valid_token()
-        df = enrich_with_strava_polylines(df, token)
-    except Exception as e:
-        print(f"  [Strava GPS] Skipped: {e}")
-    return df
 
 
 def save_activities(df: pd.DataFrame) -> None:
     CONSOLIDATED.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(CONSOLIDATED, index=False, sep=";")
-    print(f"✅ Saved {len(df)} activities to {CONSOLIDATED}")
+    print(f"\n💾 {len(df)} atividades salvas em {CONSOLIDATED.name}")
 
-    # ── Also write to SQLite ─────────────────────────────────────────────────
-    upsert_act, _, _ = _try_import_db()
+    upsert_act, _ = _try_import_db()
     if upsert_act:
         try:
             n = upsert_act(df)
-            print(f"✅ SQLite: {n} activities upserted")
-        except Exception as _e:
-            print(f"  [SQLite] activities skipped: {_e}")
+            print(f"   SQLite: {n} atividades upserted")
+        except Exception as e:
+            print(f"   [SQLite] atividades: {e}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Garmin Insights refresh (race predictions, VO2max, RHR, body battery)
+#  Laps sync
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _fmt_seconds(sec) -> str:
-    """Convert total seconds to HH:MM:SS or MM:SS string."""
-    if not sec:
-        return "—"
-    h, rem = divmod(int(sec), 3600)
-    m, s   = divmod(rem, 60)
-    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+def sync_laps(df_acts: pd.DataFrame, start: str) -> None:
+    """
+    Busca laps das atividades novas (desde `start`) e salva no CSV.
+    1 requisição por atividade — controle de rate limit automático.
+    """
+    from src.ingestion.strava import fetch_laps_for_activity
 
+    df_existing_laps = load_existing_laps()
+    existing_ids = set(df_existing_laps["activity_id"].astype(str).unique()) \
+                   if not df_existing_laps.empty else set()
 
-def _parse_rhr(raw) -> int | None:
-    """Extract RHR int from any garminconnect response shape."""
-    if isinstance(raw, (int, float)):
-        return int(raw)
-    if not isinstance(raw, dict):
-        return None
-    # garminconnect 0.3.x: allMetrics.metricsMap or direct keys
-    mm = (raw.get("allMetrics") or {}).get("metricsMap") or {}
-    for key in ("WELLNESS_RESTING_HEART_RATE", "restingHeartRate"):
-        v = mm.get(key)
-        if v:
-            if isinstance(v, list) and v:
-                return int(v[0].get("value", 0) or 0)
-            if isinstance(v, (int, float)):
-                return int(v)
-    # flat keys
-    for key in ("restingHeartRate", "value", "heartRate"):
-        v = raw.get(key)
-        if v:
-            return int(v)
-    return None
+    # Filtra só atividades Run/TrailRun novas
+    new_acts = df_acts[
+        (df_acts["start_date"] >= pd.Timestamp(start)) &
+        (df_acts["sport_type"].isin(["Run", "TrailRun"])) &
+        (~df_acts["id"].astype(str).isin(existing_ids))
+    ].copy()
 
+    if new_acts.empty:
+        print("  Laps já atualizados.")
+        return
 
-def refresh_garmin_insights() -> None:
-    """Fetch live Garmin data and MERGE into garmin_insights.json.
-    Preserves existing data for any field that fails to update."""
-    print("[Garmin Insights] Refreshing ...")
-    today     = date.today()
-    start_30d = (today - timedelta(days=29)).isoformat()
-    today_str = today.isoformat()
+    print(f"\n📥 Buscando laps para {len(new_acts)} atividades novas...")
+    all_new_laps = []
+    for i, (_, row) in enumerate(new_acts.iterrows(), 1):
+        act_id    = int(row["id"])
+        sport     = str(row["sport_type"])
+        laps_rows = fetch_laps_for_activity(act_id, sport)
+        all_new_laps.extend(laps_rows)
+        if i % 10 == 0:
+            print(f"  → {i}/{len(new_acts)} atividades")
 
-    # Load existing data as baseline — never overwrite with empty
-    existing: dict = {}
-    if INSIGHTS_FILE.exists():
+    if not all_new_laps:
+        print("  Nenhum lap encontrado.")
+        return
+
+    df_new_laps = pd.DataFrame(all_new_laps)
+    df_all_laps = pd.concat([df_existing_laps, df_new_laps], ignore_index=True) \
+                  if not df_existing_laps.empty else df_new_laps
+    df_all_laps = df_all_laps.drop_duplicates(
+        subset=["activity_id", "lap_index"], keep="last"
+    )
+
+    LAPS_CSV.parent.mkdir(parents=True, exist_ok=True)
+    df_all_laps.to_csv(LAPS_CSV, index=False, sep=";")
+    print(f"💾 {len(df_all_laps)} laps salvos em {LAPS_CSV.name}")
+
+    _, upsert_laps = _try_import_db()
+    if upsert_laps:
         try:
-            with open(INSIGHTS_FILE) as _f:
-                existing = json.load(_f)
-        except Exception:
-            pass
-
-    insights: dict = {**existing, "updated_at": today_str}
-
-    try:
-        from garminconnect import Garmin
-        TOKENS_DIR = Path.home() / ".garminconnect"
-        client = Garmin()
-        client.login(str(TOKENS_DIR))
-
-        # ── Race Predictions ─────────────────────────────────────────────────
-        try:
-            rp_raw = client.get_race_predictions()   # no args = latest
-            rp_out: dict = {}
-            if isinstance(rp_raw, dict):
-                # garminconnect 0.3.x returns nested dict with distance keys
-                # possible shapes: {fiveK:{time,timeInSeconds}, ...}
-                #                  {racePredictions:[{distance,time,...},...]}
-                #                  {predictions:{5K:{time,time_seconds},...}}
-                preds = rp_raw.get("racePredictions") or rp_raw.get("predictions") or rp_raw
-                if isinstance(preds, list):
-                    for p in preds:
-                        dist = str(p.get("distance", "")).upper().replace(" ", "")
-                        secs = p.get("time") or p.get("timeInSeconds") or 0
-                        label = {"5K": "5K", "10K": "10K",
-                                 "HALFMARATHON": "half_marathon", "MARATHON": "marathon"}.get(dist)
-                        if label and secs:
-                            rp_out[label] = {"time": _fmt_seconds(secs), "time_seconds": int(secs)}
-                elif isinstance(preds, dict):
-                    # Try camelCase keys first (raw garminconnect)
-                    for dist_key, label in [
-                        ("fiveK", "5K"), ("tenK", "10K"),
-                        ("halfMarathon", "half_marathon"), ("marathon", "marathon"),
-                    ]:
-                        val = preds.get(dist_key) or preds.get(label) or preds.get(label.replace("_", ""))
-                        if isinstance(val, dict):
-                            secs = val.get("timeInSeconds") or val.get("time_seconds") or val.get("time") or 0
-                            if secs and not isinstance(secs, str):
-                                rp_out[label] = {"time": _fmt_seconds(secs), "time_seconds": int(secs)}
-                            elif isinstance(secs, str) and ":" in secs:
-                                # already formatted — parse back
-                                parts = secs.split(":")
-                                total = sum(int(x) * (60 ** (len(parts)-1-i)) for i, x in enumerate(parts))
-                                rp_out[label] = {"time": secs, "time_seconds": total}
-            if rp_out:
-                insights["race_predictions"] = rp_out
-                print(f"  OK Race predictions: {list(rp_out.keys())}")
-            else:
-                print(f"  WARN Race predictions: empty response shape: {list(rp_raw.keys()) if isinstance(rp_raw, dict) else type(rp_raw)}")
+            n = upsert_laps(df_new_laps)
+            print(f"   SQLite: {n} laps upserted")
         except Exception as e:
-            print(f"  WARN Race predictions: {e}")
-
-        # ── VO2max — from user profile (userData.vo2MaxRunning) ───────────────
-        try:
-            profile = client.get_user_profile()
-            vo2 = None
-            if isinstance(profile, dict):
-                ud = profile.get("userData") or profile
-                vo2 = ud.get("vo2MaxRunning") or ud.get("vo2Max")
-            if vo2 is not None:
-                prev_vo2 = (existing.get("vo2max") or {}).get("current", float(vo2))
-                insights["vo2max"] = {
-                    "current":  float(vo2),
-                    "previous": float(prev_vo2),
-                    "change":   round(float(vo2) - float(prev_vo2), 1),
-                }
-                print(f"  OK VO2max: {vo2}")
-        except Exception as e:
-            print(f"  WARN VO2max: {e}")
-
-        # ── Resting HR — try today then fallback to yesterday ─────────────────
-        try:
-            rhr_val = None
-            for try_date in [today_str, (today - timedelta(days=1)).isoformat()]:
-                raw = client.get_rhr_day(try_date)
-                rhr_val = _parse_rhr(raw)
-                if rhr_val:
-                    break
-            if rhr_val:
-                insights["rhr_today"] = rhr_val
-                print(f"  OK RHR: {rhr_val} bpm")
-            else:
-                print("  WARN RHR: no data (device not synced yet?)")
-        except Exception as e:
-            print(f"  WARN RHR: {e}")
-
-        # ── Body Battery ─────────────────────────────────────────────────────
-        try:
-            bb_raw = client.get_body_battery(start_30d, today_str)
-            bb_out = []
-            for day in (bb_raw if isinstance(bb_raw, list) else []):
-                if not isinstance(day, dict):
-                    continue
-                d   = day.get("date") or day.get("calendarDate", "")
-                chg = day.get("charged") if day.get("charged") is not None else day.get("chargedValue", 0)
-                drn = day.get("drained") if day.get("drained") is not None else day.get("drainedValue", 0)
-                if d and chg is not None:
-                    bb_out.append({"date": str(d), "charged": int(chg or 0), "drained": int(drn or 0)})
-            if bb_out:
-                insights["body_battery"] = bb_out
-                print(f"  OK Body Battery: {len(bb_out)} days")
-        except Exception as e:
-            print(f"  WARN Body Battery: {e}")
-
-    except Exception as e:
-        print(f"  ERROR Could not connect to Garmin: {e}")
-
-    INSIGHTS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(INSIGHTS_FILE, "w") as f:
-        json.dump(insights, f, ensure_ascii=False, indent=2)
-    print(f"OK garmin_insights.json saved ({today_str})")
-
-    # ── Also write to SQLite ─────────────────────────────────────────────────
-    _, _, upsert_ins = _try_import_db()
-    if upsert_ins:
-        try:
-            upsert_ins(insights)
-            print("OK garmin_insights → SQLite")
-        except Exception as _e:
-            print(f"  [SQLite] insights skipped: {_e}")
+            print(f"   [SQLite] laps: {e}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Entry point
+# ─────────────────────────────────────────────────────────────────────────────
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="PerformanceRun sync")
-    parser.add_argument("--full",          action="store_true", help="Full backfill from GARMIN_START")
-    parser.add_argument("--date",          type=str,            help="Start date (YYYY-MM-DD)")
-    parser.add_argument("--insights-only", action="store_true", help="Only refresh garmin_insights.json")
+    parser = argparse.ArgumentParser(description="PerformanceRun sync (Strava / Amazfit T-Rex 3)")
+    parser.add_argument("--full",       action="store_true", help="Backfill completo desde STRAVA_START")
+    parser.add_argument("--date",       type=str,            help="Data de início (YYYY-MM-DD)")
+    parser.add_argument("--laps-only",  action="store_true", help="Só atualiza laps das atividades existentes")
     args = parser.parse_args()
 
-    if args.insights_only:
-        refresh_garmin_insights()
+    df_existing = load_existing_activities()
+
+    if args.laps_only:
+        if df_existing.empty:
+            print("Nenhuma atividade no CSV. Rode sem --laps-only primeiro.")
+            return
+        start = get_last_date(load_existing_laps()) if not load_existing_laps().empty else STRAVA_START
+        sync_laps(df_existing, start)
         return
 
-    df_existing = load_existing()
-    today = date.today().isoformat()
-
+    # Determinar janela de sync
     if args.full:
-        start = GARMIN_START
+        start = STRAVA_START
     elif args.date:
         start = args.date
     else:
-        start = get_last_date(df_existing) or GARMIN_START
+        start = get_last_date(df_existing)
 
-    print(f"Sync window: {start} -> {today}")
+    print(f"🔄 PerformanceRun Sync — Strava (Amazfit T-Rex 3)")
+    print(f"   Janela: {start} → {date.today()}")
 
-    df = fetch_and_merge(start, today, df_existing)
-    df = enrich_polylines(df)
+    df = fetch_and_merge_activities(start, df_existing)
     save_activities(df)
+    sync_laps(df, start)
 
-    # Sync laps too
-    try:
-        from src.ingestion.garmin import fetch_garmin_laps
-        from src.db.queries import upsert_laps as _ul
-        _laps_df = fetch_garmin_laps(start, today)
-        if not _laps_df.empty:
-            _n = _ul(_laps_df)
-            print(f"SQLite: {_n} laps upserted")
-    except Exception as _le:
-        print(f"  [laps] skipped: {_le}")
-
-    # Always refresh insights after an activity sync
-    refresh_garmin_insights()
+    print("\n✅ Sync concluído!")
+    print("👉 Próximo passo:")
+    print("   git add data/processed/ && git commit -m 'data: sync' && git push")
 
 
 if __name__ == "__main__":

@@ -3,37 +3,39 @@
 ## Visão geral das fontes de dados
 
 ```
-Garmin Connect  ──►  métricas de treino (distância, pace, FC, elevação, VO2max, etc.)
-Strava          ──►  GPS / mapa (polyline, altitude stream, coordenadas)
+Amazfit T-Rex 3  ──►  Zepp App  ──►  Strava  ──►  sync.py  ──►  dashboard
 ```
 
-O `sync.py` é o **único arquivo** que você precisa rodar. Ele busca tudo do Garmin,
-depois enriquece com GPS do Strava para as atividades que ainda não têm mapa.
+O Amazfit sincroniza automaticamente com o Strava via app Zepp após cada treino.
+O `sync.py` busca tudo direto do Strava — é o **único arquivo** que você precisa rodar.
+
+> **Dados históricos do Garmin** estão preservados no CSV e em `garmin_insights.json`.
+> Eles não são mais atualizados, mas continuam visíveis no dashboard.
 
 ---
 
 ## Pré-requisitos (fazer uma vez)
 
-### 1. Autenticação Garmin
-
-Execute uma vez para gerar os tokens locais:
-
-```bash
-python garmin_login.py
-```
-
-> Se o plugin Garmin já funciona no Cowork, os tokens provavelmente já estão em
-> `C:\Users\<você>\.garminconnect\` e você pode pular este passo.
-> Para confirmar, basta rodar `python sync.py` — se logar, está ok.
-
-### 2. Autenticação Strava (opcional — só para mapas)
+### Autenticação Strava
 
 O token do Strava fica em `data/token.json`. Se o arquivo já existe com um
-`refresh_token` válido, o sync funciona automaticamente. Caso contrário, você
-precisa gerar um novo token via OAuth no Strava Developer Portal.
+`refresh_token` válido, o sync funciona automaticamente.
 
-> Sem Strava: as atividades aparecem normalmente em todas as abas, exceto
-> nos **mapas** (tab Mapa), que ficam sem a linha de rota desenhada.
+Para verificar:
+```bash
+python -c "import json; d=json.load(open('data/token.json')); print('OK' if d.get('refresh_token') else 'PRECISA RENOVAR')"
+```
+
+Se precisar renovar ou configurar pela primeira vez, siga o fluxo OAuth no
+Strava Developer Portal e salve o resultado em `data/token.json`:
+
+```json
+{
+  "access_token": "...",
+  "refresh_token": "...",
+  "expires_at": 9999999999
+}
+```
 
 ---
 
@@ -47,11 +49,11 @@ python sync.py
 ```
 
 Isso faz:
-- Busca atividades novas no Garmin (desde a última que está no CSV)
-- Tenta adicionar GPS/mapa via Strava para as sem mapa
+- Busca atividades novas no Strava (desde a última que está no CSV)
+- Calcula TRIMP e índice de eficiência aeróbica automaticamente
 - Atualiza `data/processed/activities_consolidated.csv`
-- Atualiza o banco SQLite local
-- Atualiza `data/processed/garmin_insights.json` (VO2max, FC repouso, previsões)
+- Atualiza `data/processed/activity_laps_consolidated.csv` (laps por atividade)
+- Atualiza o banco SQLite local (se disponível)
 
 ### Passo 2 — Publicar no Streamlit Cloud
 
@@ -68,14 +70,30 @@ O Streamlit Cloud detecta o push e re-deploya automaticamente com os dados novos
 ## Opções avançadas
 
 ```bash
-# Só atualizar VO2max, FC repouso, previsões de prova (sem buscar corridas)
-python sync.py --insights-only
-
-# Sincronizar tudo desde o início (backfill completo — lento)
+# Backfill completo desde STRAVA_START (primeira vez ou recuperação)
 python sync.py --full
 
 # Sincronizar a partir de uma data específica
 python sync.py --date 2026-06-01
+
+# Só atualizar laps sem buscar atividades novas
+python sync.py --laps-only
+```
+
+---
+
+## Backfill de polylines (mapas) para atividades antigas
+
+Se você tem atividades sem rota no mapa:
+
+```bash
+python backfill_polylines.py --token SEU_STRAVA_ACCESS_TOKEN
+```
+
+Para incluir também altitude GPS (stream detalhado):
+
+```bash
+python backfill_polylines.py --token SEU_STRAVA_ACCESS_TOKEN --altitude
 ```
 
 ---
@@ -87,18 +105,6 @@ Se você adicionou atividades novas via CSV e quer popular o banco:
 ```bash
 python -m src.db.migrate
 ```
-
----
-
-## Backfill de polylines (mapas) para atividades antigas
-
-Se você tem atividades sem mapa (importadas só via Garmin):
-
-```bash
-python backfill_polylines.py --token SEU_STRAVA_ACCESS_TOKEN
-```
-
-> Use sem `--full` para evitar erros 404 em atividades que existem só no Garmin.
 
 ---
 
@@ -124,7 +130,8 @@ O token precisa da permissão `repo` (leitura e escrita no repositório).
 | O que fazer | Comando |
 |---|---|
 | Sincronizar corridas novas | `python sync.py` |
-| Só atualizar métricas Garmin | `python sync.py --insights-only` |
+| Backfill completo | `python sync.py --full` |
+| Só laps | `python sync.py --laps-only` |
 | Publicar no Streamlit | `git add data/processed/ && git commit -m "data: sync" && git push` |
 | Popular banco SQLite local | `python -m src.db.migrate` |
-| Login Garmin (primeira vez) | `python garmin_login.py` |
+| Backfill de mapas | `python backfill_polylines.py --token SEU_TOKEN` |
